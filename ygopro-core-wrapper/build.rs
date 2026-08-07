@@ -24,7 +24,7 @@ fn main() {
     for entry in glob(lua_dir.join("*.c").to_str().unwrap()).unwrap() {
         let path = entry.unwrap();
         let filename = path.file_name().unwrap().to_str().unwrap();
-        if filename != "lua.c" && filename != "luac.c" {
+        if filename != "lua.c" && filename != "luac.c" && filename != "onelua.c" {
             build.file(&path);
         }
     }
