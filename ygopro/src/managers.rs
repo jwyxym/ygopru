@@ -391,6 +391,12 @@ pub mod config_manager {
             }
         }
 
+        pub fn from(entries: HashMap<String, String>) -> Self {
+            Self {
+                entries: entries,
+            }
+        }
+
         pub fn load(&mut self, path: &str) -> io::Result<()> {
             let content = fs::read_to_string(path)?;
             for line in content.lines() {
