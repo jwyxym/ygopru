@@ -1,0 +1,170 @@
+﻿name: Build native libraries
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  android:
+    name: Android ${{ matrix.abi }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+            output: libygoserver.so
+          - abi: armeabi-v7a
+            target: armv7-linux-androideabi
+            output: libygoserver.so
+          - abi: x86
+            target: i686-linux-android
+            output: libygoserver.so
+          - abi: x86_64
+            target: x86_64-linux-android
+            output: libygoserver.so
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          add-to-path: true
+
+      - name: Build
+        run: cargo build --release --lib -p ygoserver --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: aarch64-linux-android21-clang
+          CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER: armv7a-linux-androideabi21-clang
+          CARGO_TARGET_I686_LINUX_ANDROID_LINKER: i686-linux-android21-clang
+          CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER: x86_64-linux-android21-clang
+
+      - name: Package
+        run: |
+          mkdir -p dist/android/${{ matrix.abi }}
+          cp target/${{ matrix.target }}/release/${{ matrix.output }} dist/android/${{ matrix.abi }}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ygoserver-android-${{ matrix.abi }}
+          path: dist/android/${{ matrix.abi }}/${{ matrix.output }}
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --lib -p ygoserver --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          mkdir -p dist/linux-${{ matrix.arch }}
+          cp target/${{ matrix.target }}/release/libygoserver.so dist/linux-${{ matrix.arch }}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ygoserver-linux-${{ matrix.arch }}
+          path: dist/linux-${{ matrix.arch }}/libygoserver.so
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --lib -p ygoserver --target ${{ matrix.target }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/windows-${{ matrix.arch }} | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/ygoserver.dll dist/windows-${{ matrix.arch }}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ygoserver-windows-${{ matrix.arch }}
+          path: dist/windows-${{ matrix.arch }}/ygoserver.dll
+
+  macos:
+    name: macOS universal
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Build x86_64
+        run: cargo build --release --lib -p ygoserver --target x86_64-apple-darwin
+
+      - name: Build arm64
+        run: cargo build --release --lib -p ygoserver --target aarch64-apple-darwin
+
+      - name: Package universal dylib
+        run: |
+          mkdir -p dist/macos-universal
+          lipo -create \
+            target/x86_64-apple-darwin/release/libygoserver.dylib \
+            target/aarch64-apple-darwin/release/libygoserver.dylib \
+            -output dist/macos-universal/libygoserver.dylib
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ygoserver-macos-universal
+          path: dist/macos-universal/libygoserver.dylib

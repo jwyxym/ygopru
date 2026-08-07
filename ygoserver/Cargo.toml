@@ -1,0 +1,30 @@
+[package]
+name = "ygoserver"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "ygoserver"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "ygoserver"
+path = "src/main.rs"
+
+[dependencies]
+ygopro = { path = "../ygopro" }
+ygopro-core-wrapper = { path = "../ygopro-core-wrapper" }
+ygopro-data = { path = "../ygopro-data" }
+ygopro-handler = { path = "../ygopro-handler" }
+
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+log = "0.4"
+env_logger = { version = "0.11", features = ["auto-color", "humantime"] }
+base64 = "0.22"
+binrw = "0.13"
+futures = "0.3"
+hashbrown = "0.17.1"
+parking_lot = { version = "0", features = ["arc_lock", "send_guard"] }

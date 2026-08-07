@@ -1,4 +1,4 @@
-use std::io::Cursor;
+﻿use std::io::Cursor;
 use std::ops::Deref;
 
 use base64::Engine;
@@ -42,8 +42,8 @@ fn parse_args() -> (u16, HostInfo, ReplayMode, Vec<[u32; SEED_COUNT]>) {
     let port: u16 = args[1].parse().expect("Cannot parse port number");
 
     let hostinfo = HostInfo {
-        lflist: args[2].parse().unwrap_or(999),
-        rule: Rule::from_bits_retain(args[3].parse::<u8>().unwrap_or(0)),
+        lflist: (args[2]).parse().unwrap_or(999),
+        rule: parse_rule(&args[3]),
         mode: match args[4].parse::<u8>().unwrap_or(0) {
             m if m > 2 => Mode::Single,
             m => Mode::try_from(m).unwrap_or(Mode::Single),
@@ -129,4 +129,15 @@ async fn start_server(port: u16, hostinfo: HostInfo, replay_mode: ReplayMode, pr
     });
 
     handle.await.ok();
+}
+
+fn parse_rule(argument: &str) -> Rule {
+    match argument.parse::<u8>().unwrap_or(5) {
+        0 => Rule::OCG,
+        1 => Rule::TCG,
+        2 => Rule::SC,
+        3 => Rule::Custom,
+        4 => Rule::OCG | Rule::TCG,
+        _ => Rule::empty(),
+    }
 }

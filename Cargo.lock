@@ -1711,20 +1711,15 @@ name = "ygopro"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
- "base64",
  "binrw",
  "bytes",
- "env_logger 0.11.11",
  "futures",
- "glob",
  "hashbrown 0.17.1",
  "linkme",
  "log",
  "parking_lot",
- "rand",
  "tokio",
  "tokio-stream",
- "tokio-util",
  "walkdir",
  "ygopro-core-wrapper",
  "ygopro-data",
@@ -1826,6 +1821,26 @@ dependencies = [
  "ygopro-core-wrapper",
  "ygopro-data",
  "ygopro-external-server-bridge",
+ "ygopro-handler",
+]
+
+[[package]]
+name = "ygoserver"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "binrw",
+ "env_logger 0.11.11",
+ "futures",
+ "hashbrown 0.17.1",
+ "log",
+ "parking_lot",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "ygopro",
+ "ygopro-core-wrapper",
+ "ygopro-data",
  "ygopro-handler",
 ]
 

@@ -7,5 +7,11 @@ members = [
     "ygopro-handler",
     "ygopro",
     "ygopro-toolkits",
-    "ygopro-external-server-bridge"
+    "ygopro-external-server-bridge",
+    "ygoserver"
 ]
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 'z'
