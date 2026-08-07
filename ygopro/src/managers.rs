@@ -4,10 +4,13 @@ pub mod data_manager {
     use std::ffi::CStr;
     use std::fs;
     use std::sync::Arc;
+    use std::path::Path;
+    use std::path::PathBuf;
 
     use arc_swap::ArcSwapOption;
     use hashbrown::HashMap;
     use parking_lot::Mutex;
+    use walkdir::WalkDir;
 
     use ygopro_data::constants::Type;
     use ygopro_data::data::Card;
@@ -25,29 +28,42 @@ pub mod data_manager {
     }
 
     pub fn init() {
-        let db_path = super::config_manager::load()
+        let path: String = super::config_manager::load()
             .as_ref()
-            .and_then(|config_manager| config_manager.get("db_path"))
-            .unwrap_or("cards.cdb, expansions/*.cdb")
+            .and_then(|config_manager| config_manager.get("path"))
+            .unwrap_or("./")
             .to_string();
+        let i18n: String = super::config_manager::load()
+            .as_ref()
+            .and_then(|config_manager| config_manager.get("i18n"))
+            .unwrap_or("zh-CN")
+            .to_string();
+        let path: &Path = Path::new(&path);
+        let expansions_path: PathBuf = path.join("expansions");
+        let db_path: PathBuf = path.join("cdb").join(format!("cards-{}.cdb", i18n));
 
-        let mut data_manager = DataManager::new();
-        for db_pattern in super::config_manager::split_paths(&db_path) {
-            let Ok(entries) = glob::glob(db_pattern) else {
-                log::warn!("Failed to parse glob {}", db_pattern);
-                continue;
-            };
-            for entry in entries {
-                let path = entry.map_err(|err| log::warn!("Failed to read glob entry {}: {:?}", db_pattern, err)).ok();
-                if let Some(path) = path {
-                    if let Some(bytes) = crate::ypk::archive_manager::read_file(&path.to_string_lossy()) {
-                        data_manager.load_db_from_bytes(&bytes)
-                            .map(|()| log::trace!("Loaded database {}", path.display()))
-                            .map_err(|err| log::warn!("Failed to load database {}: {:?}", path.display(), err)).ok();
+        let mut data_manager: DataManager = DataManager::new();
+        
+        data_manager.load_db(&db_path.to_string_lossy())
+            .map(|()| log::trace!("Loaded database {}", db_path.display()))
+            .map_err(|err| log::warn!("Failed to load database {}: {:?}", db_path.display(), err))
+            .ok();
+		WalkDir::new(expansions_path)
+			.max_depth(1)
+			.into_iter()
+			.for_each(|i| {
+				if let Ok(i) = i {
+                    let p: &Path = i.path();
+					if let Some(name) = p.file_name().and_then(|n| n.to_str())
+                        && name.ends_with(".cdb") {
+                        data_manager.load_db(&p.to_string_lossy())
+                            .map(|()| log::trace!("Loaded database {}", name))
+                            .map_err(|err| log::warn!("Failed to load database {}: {:?}", name, err))
+                            .ok();
                     }
                 }
-            }
-        }
+			});
+
         #[cfg(feature = "zip")]
         for cdb_name in crate::ypk::archive_manager::cdb_names() {
             if let Some(bytes) = crate::ypk::archive_manager::read_file(&cdb_name) {
@@ -248,8 +264,11 @@ pub mod deck_manager {
     use std::fs;
     use std::io;
     use std::sync::Arc;
+    use std::path::Path;
+    use std::path::PathBuf;
 
     use arc_swap::ArcSwapOption;
+    use walkdir::WalkDir;
 
     use ygopro_data::data::parse_lflist_content;
     use ygopro_data::data::LFList;
@@ -265,33 +284,38 @@ pub mod deck_manager {
     }
 
     pub fn init() {
-        let lflist_path = super::config_manager::load()
+        let path: String = super::config_manager::load()
             .as_ref()
-            .and_then(|config_manager| config_manager.get("lflist_path"))
-            .unwrap_or("expansions/lflist.conf, lflist.conf")
+            .and_then(|config_manager| config_manager.get("path"))
+            .unwrap_or("./")
             .to_string();
+        let path: &Path = Path::new(&path);
+
+        let lflist_path: PathBuf = path.join("lflist.conf");
 
         let mut deck_manager = DeckManager::new();
-        for lflist_pattern in super::config_manager::split_paths(&lflist_path) {
-            let Ok(entries) = glob::glob(lflist_pattern) else {
-                log::warn!("Failed to parse glob {}", lflist_pattern);
-                continue;
-            };
-            for entry in entries {
-                let path = entry.map_err(|err| log::warn!("Failed to read glob entry {}: {:?}", lflist_pattern, err)).ok();
-                if let Some(path) = path {
-                    deck_manager.load_lflist(&path.to_string_lossy())
-                        .map_err(|err| log::warn!("Failed to read lflist {}: {:?}", path.display(), err)).ok();
+		WalkDir::new(&lflist_path)
+			.max_depth(1)
+			.into_iter()
+			.for_each(|i| {
+				if let Ok(i) = i {
+                    let p: &Path = i.path();
+					if let Some(name) = p.file_name().and_then(|n| n.to_str())
+                        && name.ends_with("lflist.conf") {
+                        deck_manager.load_lflist(&path.to_string_lossy())
+                            .map_err(|err| log::warn!("Failed to read lflist {}: {:?}", path.display(), err)).ok();
+                    }
                 }
-            }
-        }
-        if !deck_manager.lflists.is_empty() {
-            deck_manager.lflists.push(LFList {
-                hash: 0,
-                name: "N/A".to_string(),
-                content: HashMap::new(),
-            });
-        }
+			});
+        deck_manager.load_lflist(&lflist_path.to_string_lossy())
+            .map_err(|err| log::warn!("Failed to read lflist {}: {:?}", path.display(), err))
+            .ok();
+
+        deck_manager.lflists.push(LFList {
+            hash: 0,
+            name: "N/A".to_string(),
+            content: HashMap::new(),
+        });
         set_global(deck_manager);
     }
 

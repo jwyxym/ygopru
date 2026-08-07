@@ -1,42 +1,53 @@
 pub mod archive_manager {
+    use std::collections::HashSet;
     use std::fs;
     use std::io::Read;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     use arc_swap::ArcSwapOption;
     use parking_lot::Mutex;
     use zip::ZipArchive;
-    use log::warn;
 
     struct ExpansionArchive {
-        path: String,
+        path: PathBuf,
         archive_reader: Mutex<ZipArchive<fs::File>>,
     }
 
     static GLOBAL_ARCHIVES: ArcSwapOption<Vec<ExpansionArchive>> = ArcSwapOption::const_empty();
 
     pub fn init() {
-        let mut expansion_archives = Vec::new();
-        let Ok(entries) = fs::read_dir("./expansions") else {
-            warn!("Failed to read directory ./expansions");
-            GLOBAL_ARCHIVES.store(Some(Arc::new(expansion_archives)));
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !is_expansion_archive(&path) {
-                continue;
-            }
-            let Ok(file) = fs::File::open(&path) else {
-                warn!("Failed to open archive {}", path.display());
+        let path: String = crate::managers::config_manager::load()
+            .as_ref()
+            .and_then(|config_manager| config_manager.get("path"))
+            .unwrap_or("./")
+            .to_string();
+        let path: &Path = Path::new(&path);
+        let expansions_path: PathBuf = path.join("expansions");
+        let pack_names: HashSet<String> = crate::managers::config_manager::load()
+            .as_ref()
+            .and_then(|config_manager| config_manager.get("pack_names"))
+            .map(|pack_names| {
+                pack_names
+                    .split('/')
+                    .map(|pack_name| pack_name.trim().to_string())
+                    .filter(|pack_name| !pack_name.is_empty())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        let mut expansion_archives: Vec<ExpansionArchive> = Vec::new();
+        for pack_name in &pack_names {
+            let pack_path: PathBuf = expansions_path.join(pack_name);
+            let Ok(file) = fs::File::open(&pack_path) else {
+                log::debug!("Failed to open archive {}", pack_name);
                 continue;
             };
             match ZipArchive::new(file) {
                 Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
-                    path: path.display().to_string(),
+                    path: pack_path,
                     archive_reader: Mutex::new(archive_reader),
                 }),
-                Err(error) => warn!("Failed to open archive {}: {}", path.display(), error),
+                Err(error) => log::debug!("Failed to open archive {}: {}", pack_name, error),
             }
         }
         GLOBAL_ARCHIVES.store(Some(Arc::new(expansion_archives)));
@@ -79,12 +90,5 @@ pub mod archive_manager {
             }
         }
         names
-    }
-
-    fn is_expansion_archive(path: &std::path::Path) -> bool {
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension == "zip" || extension == "ypk")
-            .unwrap_or(false)
     }
 }
