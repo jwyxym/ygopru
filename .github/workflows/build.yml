@@ -2,7 +2,8 @@
 
 on:
   push:
-  workflow_dispatch:
+    branches:
+      - ygopro3
 
 jobs:
   android:
