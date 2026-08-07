@@ -12,7 +12,7 @@ pub mod data_manager {
     use parking_lot::Mutex;
     use walkdir::WalkDir;
 
-    use ygopro_data::constants::Type;
+use ygopro_data::constants::Type;
     use ygopro_data::data::Card;
     use ygopro_data::data::CoreCard;
 
@@ -73,7 +73,6 @@ pub mod data_manager {
             }
         }
         data_manager.finalize_db();
-        println!("data_manager.cards.len(): {:?}", data_manager.cards.len());
         set_global(data_manager);
     }
 
@@ -186,7 +185,7 @@ pub mod data_manager {
 
     /// Corresponds to `ScriptReaderEx` in data_manager.cpp:493-517.
     pub extern "C" fn script_reader(script_path: *const c_char, slen: *mut c_int) -> *mut u8 {
-        fn read_file(file_path: &str, buffer: &mut [u8]) -> Option<usize> {
+        fn read_file<P: AsRef<Path>>(file_path: P, buffer: &mut [u8]) -> Option<usize> {
             fs::read(file_path).ok().and_then(|data| {
                 if data.len() >= buffer.len() {
                     return None;
@@ -209,19 +208,31 @@ pub mod data_manager {
         if script_path.is_null() || slen.is_null() {
             return std::ptr::null_mut();
         }
-        let path = unsafe { CStr::from_ptr(script_path).to_string_lossy() };
-        let mut buffer = SCRIPT_BUFFER.lock();
+        let script = unsafe { CStr::from_ptr(script_path).to_string_lossy() };
+        let script = script.as_ref();
 
-        if !path.starts_with("./script") {
-            if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
+        let mut buffer = SCRIPT_BUFFER.lock();
+        if !script.starts_with("./script") {
+            if let Some(len) = read_file(script, &mut *buffer) {
                 unsafe { *slen = len as c_int; }
                 return buffer.as_mut_ptr();
             }
             return std::ptr::null_mut();
         }
 
-        let script_name = &path[2..];
-        let expansions_path = format!("./expansions/{}", script_name);
+        let path: String = super::config_manager::load()
+            .as_ref()
+            .and_then(|config_manager| config_manager.get("path"))
+            .unwrap_or("./")
+            .to_string();
+        let path: &Path = Path::new(&path);
+        let script_name: &str = &script[2..];
+        let script_path: PathBuf = path
+            .join(script_name);
+
+        let expansions_path: PathBuf = path
+            .join("expansions")
+            .join(script_name);
         let prefer_expansion_script = super::config_manager::load()
             .as_ref()
             .and_then(|config_manager| config_manager.get("prefer_expansion_script"))
@@ -238,7 +249,7 @@ pub mod data_manager {
                 unsafe { *slen = len as c_int; }
                 return buffer.as_mut_ptr();
             }
-            if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
+            if let Some(len) = read_file(&script_path, &mut *buffer) {
                 unsafe { *slen = len as c_int; }
                 return buffer.as_mut_ptr();
             }
@@ -248,7 +259,7 @@ pub mod data_manager {
                 unsafe { *slen = len as c_int; }
                 return buffer.as_mut_ptr();
             }
-            if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
+            if let Some(len) = read_file(&script_path, &mut *buffer) {
                 unsafe { *slen = len as c_int; }
                 return buffer.as_mut_ptr();
             }
@@ -337,7 +348,6 @@ pub mod deck_manager {
             name: "N/A".to_string(),
             content: HashMap::new(),
         });
-        println!("deck_manager.lflists.len(): {:?}", deck_manager.lflists.len());
         set_global(deck_manager);
     }
 
