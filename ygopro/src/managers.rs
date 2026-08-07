@@ -43,18 +43,18 @@ pub mod data_manager {
         let db_path: PathBuf = path.join("cdb").join(format!("cards-{}.cdb", i18n));
 
         let mut data_manager: DataManager = DataManager::new();
-        
+
         data_manager.load_db(&db_path.to_string_lossy())
             .map(|()| log::trace!("Loaded database {}", db_path.display()))
             .map_err(|err| log::warn!("Failed to load database {}: {:?}", db_path.display(), err))
             .ok();
-		WalkDir::new(expansions_path)
-			.max_depth(1)
-			.into_iter()
-			.for_each(|i| {
-				if let Ok(i) = i {
+        WalkDir::new(expansions_path)
+            .max_depth(1)
+            .into_iter()
+            .for_each(|i| {
+                if let Ok(i) = i {
                     let p: &Path = i.path();
-					if let Some(name) = p.file_name().and_then(|n| n.to_str())
+                    if let Some(name) = p.file_name().and_then(|n| n.to_str())
                         && name.ends_with(".cdb") {
                         data_manager.load_db(&p.to_string_lossy())
                             .map(|()| log::trace!("Loaded database {}", name))
@@ -62,7 +62,7 @@ pub mod data_manager {
                             .ok();
                     }
                 }
-			});
+            });
 
         #[cfg(feature = "zip")]
         for cdb_name in crate::ypk::archive_manager::cdb_names() {
@@ -73,6 +73,7 @@ pub mod data_manager {
             }
         }
         data_manager.finalize_db();
+        println!("data_manager.cards.len(): {:?}", data_manager.cards.len());
         set_global(data_manager);
     }
 
@@ -313,20 +314,20 @@ pub mod deck_manager {
 
         let lflist_path: PathBuf = path.join("lflist.conf");
 
-        let mut deck_manager = DeckManager::new();
-		WalkDir::new(&lflist_path)
-			.max_depth(1)
-			.into_iter()
-			.for_each(|i| {
-				if let Ok(i) = i {
+        let mut deck_manager: DeckManager = DeckManager::new();
+        WalkDir::new(path.join("expansions"))
+            .max_depth(1)
+            .into_iter()
+            .for_each(|i| {
+                if let Ok(i) = i {
                     let p: &Path = i.path();
-					if let Some(name) = p.file_name().and_then(|n| n.to_str())
+                    if let Some(name) = p.file_name().and_then(|n| n.to_str())
                         && name.ends_with("lflist.conf") {
                         deck_manager.load_lflist(&path.to_string_lossy())
                             .map_err(|err| log::warn!("Failed to read lflist {}: {:?}", path.display(), err)).ok();
                     }
                 }
-			});
+            });
         deck_manager.load_lflist(&lflist_path.to_string_lossy())
             .map_err(|err| log::warn!("Failed to read lflist {}: {:?}", path.display(), err))
             .ok();
@@ -336,6 +337,7 @@ pub mod deck_manager {
             name: "N/A".to_string(),
             content: HashMap::new(),
         });
+        println!("deck_manager.lflists.len(): {:?}", deck_manager.lflists.len());
         set_global(deck_manager);
     }
 
