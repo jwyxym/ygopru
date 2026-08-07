@@ -1,6 +1,5 @@
 use std::io::Cursor;
 use std::ops::Deref;
-use std::sync::OnceLock;
 
 use base64::Engine;
 use binrw::BinRead;
@@ -9,7 +8,8 @@ use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
 use tokio_util::codec::LengthDelimitedCodec;
 
-use ygopro::single_duel::SingleDuelHost;
+use ygopro::SingleDuel;
+use ygopro_core_wrapper::random::SEED_COUNT;
 use ygopro_core_wrapper::DuelSeed;
 use ygopro_data::constants::Mode;
 use ygopro_data::constants::MasterRule;
@@ -23,26 +23,26 @@ use ygopro_handler::RoomProvider;
 async fn main() {
     env_logger::init();
     ygopro::init();
-    let (port, hostinfo, replay_mode) = parse_args();
-    start_server(port, hostinfo, replay_mode).await;
+    let (port, hostinfo, replay_mode, pre_seeds) = parse_args();
+    start_server(port, hostinfo, replay_mode, pre_seeds).await;
 }
 
-fn parse_args() -> (u16, HostInfo, ReplayMode) {
+fn parse_args() -> (u16, HostInfo, ReplayMode, Vec<[u32; SEED_COUNT]>) {
     let args = std::env::args().collect::<Vec<String>>();
     if args.len() > 2 && args.len() < 13 {
         log::error!("Bad param count. Please refer to readme, or don't use any param to quick test.");
         std::process::exit(1);
     } else if args.len() == 1 {
-        return (0, HostInfo::default(), ReplayMode::empty());
+        return (0, HostInfo::default(), ReplayMode::empty(), Vec::new());
     } else if args.len() == 2 {
         let port: u16 = args[1].parse().expect("Cannot parse port number");
-        return (port, HostInfo::default(), ReplayMode::empty());
+        return (port, HostInfo::default(), ReplayMode::empty(), Vec::new());
     }
 
     let port: u16 = args[1].parse().expect("Cannot parse port number");
 
     let hostinfo = HostInfo {
-        lflist: args[2].parse().unwrap_or(0),
+        lflist: args[2].parse().unwrap_or(999),
         rule: Rule::from_bits_retain(args[3].parse::<u8>().unwrap_or(0)),
         mode: match args[4].parse::<u8>().unwrap_or(0) {
             m if m > 2 => Mode::Single,
@@ -67,12 +67,10 @@ fn parse_args() -> (u16, HostInfo, ReplayMode) {
     };
     let replay_mode = ReplayMode::from_bits_retain(args[12].parse::<u32>().unwrap_or(0));
     let pre_seeds = args.iter().skip(13).map(|seed_arg| decode_seed(seed_arg)).collect();
-    PRE_SEEDS.set(pre_seeds).ok();
-    (port, hostinfo, replay_mode)
+    (port, hostinfo, replay_mode, pre_seeds)
 }
 
-static PRE_SEEDS: OnceLock<Vec<[u32; ygopro_core_wrapper::random::SEED_COUNT]>> = OnceLock::new();
-fn decode_seed(seed_arg: &str) -> [u32; ygopro_core_wrapper::random::SEED_COUNT] {
+fn decode_seed(seed_arg: &str) -> [u32; SEED_COUNT] {
     let bytes = base64::engine::general_purpose::STANDARD.decode(seed_arg).unwrap();
     let mut seed = [0u32; ygopro_core_wrapper::random::SEED_COUNT];
     for (index, chunk) in bytes.chunks_exact(4).enumerate() {
@@ -81,22 +79,20 @@ fn decode_seed(seed_arg: &str) -> [u32; ygopro_core_wrapper::random::SEED_COUNT]
     seed
 }
 
-fn seed_generator(duel_count: u8) -> DuelSeed {
-    match PRE_SEEDS.get().and_then(|seeds| seeds.get(duel_count as usize)).copied() {
-        Some(seed) => DuelSeed::Complicated(seed),
-        None => DuelSeed::None,
-    }
-}
-
-async fn start_server(port: u16, hostinfo: HostInfo, replay_mode: ReplayMode) {
+async fn start_server(port: u16, hostinfo: HostInfo, replay_mode: ReplayMode, pre_seeds: Vec<[u32; SEED_COUNT]>) {
     let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await.expect("Failed to bind to port");
     let port = listener.local_addr().expect("Failed to get random port").port();
     println!("{port}");
     log::info!("listening on port {port}");
     let mut configuration = ygopro::managers::config_manager::get_duel_configuration();
-    configuration.seed_generator = Some(seed_generator);
+    configuration.seed_generator = Some(Box::new(move |duel_count: u8| {
+        match pre_seeds.get(duel_count as usize).copied() {
+            Some(seed) => DuelSeed::Complicated(seed),
+            None => DuelSeed::None,
+        }
+    }));
     configuration.replay_mode = replay_mode;
-    let (mut duel, handle) = SingleDuelHost::new(hostinfo, configuration);
+    let (mut duel, handle) = SingleDuel::new(hostinfo, configuration);
 
     tokio::spawn(async move {
         loop {

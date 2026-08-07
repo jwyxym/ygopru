@@ -2,6 +2,7 @@ use std::ffi::c_void;
 
 pub const SEED_COUNT: usize = 8;
 
+#[derive(Clone)]
 pub enum DuelSeed {
     None,
     Single(u32),

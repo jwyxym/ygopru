@@ -285,4 +285,20 @@ pub mod complex {
             Self::from_message(message)
         }
     }
+
+    impl<Message> From<&Complex<Message>> for crate::message::client_to_server::MessageType {
+        fn from(value: &Complex<Message>) -> Self {
+            Self::from(value.data[0])
+        }
+    }
+    impl<Message> From<&Complex<Message>> for crate::message::server_to_client::MessageType {
+        fn from(value: &Complex<Message>) -> Self {
+            Self::from(value.data[0])
+        }
+    }
+    impl<Message> From<&Complex<Message>> for crate::message::game_message::MessageType {
+        fn from(value: &Complex<Message>) -> Self {
+            Self::from(value.data[0])
+        }
+    }
 }

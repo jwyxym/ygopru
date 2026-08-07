@@ -22,3 +22,7 @@ Mask修一下。（已完成）
 ---
 single_duel的room instance何时断开？听起来是个option。
 ctos::response是一个可以语义化的东西。
+----
+处理两个人同时加入引起的竞争。
+处理ctos::response的语义处理。
+处理time_backed，这显然应该是一个option。

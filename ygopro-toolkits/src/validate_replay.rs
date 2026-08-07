@@ -1,67 +1,36 @@
-use std::collections::VecDeque;
+//! Replay validation. Drives a replay through either the in-process
+//! [`SingleDuel`] engine or an external ygopro-server binary bridged by
+//! [`YgoproBinaryProvider`]. Both backends speak
+//! `RoomProvider<ctos::Message, Complex<stoc::Message>>`, so the driving logic
+//! below is shared and only the room construction differs.
+
 use std::io::Cursor;
-use std::ops::Deref;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use binrw::BinRead;
 use futures::SinkExt;
-use futures::StreamExt;
+use glob::glob;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
-use tokio::time::timeout;
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::StreamExt;
 use tokio_util::codec::FramedRead;
 use tokio_util::codec::FramedWrite;
 use tokio_util::codec::LengthDelimitedCodec;
 
 use ygopro::managers::DataManager;
 use ygopro::managers::data_manager;
-use ygopro::single_duel::Configuration;
-use ygopro::single_duel::SingleDuelHost;
-use ygopro_handler::RoomProvider;
 use ygopro_data::complex::Complex;
-use ygopro_data::constants::CorePlayer;
 use ygopro_data::constants::Netplayer;
 use ygopro_data::data::Replay;
 use ygopro_data::data::ReplayDeck;
-use ygopro_data::data::Response;
 use ygopro_data::message::ctos;
-use ygopro_data::message::gm;
-use ygopro_data::message::gm::GameMessage;
 use ygopro_data::message::stoc;
+use ygopro_handler::RoomProvider;
+use ygopro_external_server_bridge::YgoproBinaryFactory;
 
-use crate::start_game::start_game;
-use crate::start_game::StartedDuel;
-
-const START_GAME_TIMEOUT: Duration = Duration::from_secs(1);
-
-#[derive(thiserror::Error, Debug)]
-pub enum ValidationError {
-    #[error("cannot read replay file: {0}")]
-    Io(std::io::Error),
-    #[error("cannot parse replay file: {0}")]
-    Parse(binrw::Error),
-    #[error("card database is missing cards: {0:?}")]
-    MissingCards(Vec<u32>),
-    #[error("tag duel replays are not supported yet")]
-    TagReplayNotSupported,
-    #[error("replay contains no responses")]
-    EmptyReplay,
-    #[error("engine rejected a response, the replay desynced")]
-    Retry,
-    #[error("replay has {0} unconsumed responses after the duel ended")]
-    LeftoverResponses(usize),
-    #[error("server rejected the session")]
-    ServerRejected,
-    #[error("duel ended without a win message")]
-    NoWin,
-    #[error("session ended before the duel finished")]
-    DuelDidNotEnd,
-    #[error("validation timed out")]
-    Timeout,
-}
+use crate::common::start_game::*;
 
 #[derive(Debug)]
 pub struct ValidationSummary {
@@ -70,39 +39,129 @@ pub struct ValidationSummary {
     pub replayed_to_end: bool,
 }
 
-enum Outcome {
-    Continue,
-    DuelEnded,
-    ReplayEnded,
-}
-
-struct DuelAbortGuard(tokio::task::JoinHandle<()>);
-
-impl Drop for DuelAbortGuard {
-    fn drop(&mut self) {
-        self.0.abort();
+pub async fn run(paths: &[PathBuf], wait: Option<u16>, timeout_seconds: u64, server_bin: Option<PathBuf>, server_cwd: Option<PathBuf>) {
+    ygopro::init();
+    let mut matched_paths = Vec::new();
+    for pattern in paths {
+        match glob(&pattern.to_string_lossy()) {
+            Ok(glob_matches) => matched_paths.extend(glob_matches.filter_map(Result::ok)),
+            Err(error) => {
+                log::error!("cannot parse pattern {}: {error}", pattern.display());
+                std::process::exit(1);
+            }
+        }
+    }
+    if matched_paths.is_empty() {
+        log::error!("no replay files matched");
+        std::process::exit(1);
+    }
+    let single_file = matched_paths.len() == 1;
+    let mut failed_count = 0;
+    for path in matched_paths {
+        let wait = if single_file { wait } else { None };
+        match validate_replay(&path, wait, timeout_seconds, server_bin.clone(), server_cwd.clone()).await {
+            Ok(summary) => {
+                let winner_text = match summary.winner {
+                    Some(winner) => format!("{winner:?}"),
+                    None if summary.replayed_to_end => "unknown (surrendered)".to_string(),
+                    None => "draw".to_string(),
+                };
+                log::info!(
+                    "{}: replay is valid: {} responses replayed, winner: {winner_text}",
+                    path.display(),
+                    summary.response_count
+                );
+            }
+            Err(error) => {
+                log::error!("{}: replay is invalid: {error}", path.display());
+                failed_count += 1;
+            }
+        }
+    }
+    if failed_count > 0 {
+        std::process::exit(1);
     }
 }
 
-fn bridge_observer(host: &mut SingleDuelHost, socket: TcpStream) {    let (viewer_reader, viewer_writer) = socket.into_split();
+pub async fn validate_replay(path: &Path, wait: Option<u16>, timeout_seconds: u64, server_bin: Option<PathBuf>, server_cwd: Option<PathBuf>) -> Result<ValidationSummary, ReconstructionError> {
+    let validation_timeout = Duration::from_secs(timeout_seconds);
+    let bytes = std::fs::read(path).map_err(ReconstructionError::Io)?;
+    let replay = Replay::read_le(&mut Cursor::new(bytes)).map_err(ReconstructionError::Parse)?;
+    if replay.is_tag() {
+        return Err(ReconstructionError::TagReplayNotSupported);
+    }
+    if replay.body.datas.is_empty() {
+        return Err(ReconstructionError::EmptyReplay);
+    }
+
+    let data_manager = data_manager::load();
+    let data_manager = data_manager.as_ref().expect("data manager is not initialized");
+    check_deck_cards(&replay.body.host_deck, data_manager)?;
+    check_deck_cards(&replay.body.client_deck, data_manager)?;
+
+    match (server_bin, server_cwd) {
+        (Some(server_bin), Some(server_cwd)) => {
+            let factory = YgoproBinaryFactory::new(server_bin.to_string_lossy().into_owned(), server_cwd.to_string_lossy().into_owned());
+            let host_info = replay.host_info();
+            let seed = replay.header.seed_sequence;
+            let mut provider = factory.start("validate".to_string(), host_info, Some(vec![seed])).await.map_err(ReconstructionError::Io)?;
+            validate_with_room(&mut provider, replay, wait, validation_timeout).await
+        }
+        _ => {
+            let mut host_info = replay.host_info();
+            host_info.time_limit = 0;
+            let configuration = ygopro::Configuration {
+                no_mask: true,
+                no_init_shuffle_deck: true,
+                seed_generator: Some(Box::new(move |_duel_count: u8| ygopro_core_wrapper::DuelSeed::Complicated(replay.header.seed_sequence))),
+                ..Default::default()
+            };
+            let (mut host, _duel_task) = ygopro::SingleDuel::new(host_info, configuration);
+            validate_with_room(&mut host, replay,  wait, validation_timeout).await
+        }
+    }
+}
+
+async fn validate_with_room<Room: RoomProvider<ctos::Message, Complex<stoc::Message>>>(
+    room: &mut Room,
+    replay: Replay,
+    wait: Option<u16>,
+    validation_timeout: Duration,
+) -> Result<ValidationSummary, ReconstructionError> {
+    let (mut player1, mut player2) = start_duel(&replay, room).await?;
+    bridge_viewer(room, wait).await?;
+    let response_count = replay.body.datas.len();
+    let responses: Vec<ctos::Response> = replay.body.datas.into_iter().map(|data| ctos::Response { response: data.data }).collect();
+    let (winner, replayed_to_end) = drive_duel::<Room>(&mut player1, &mut player2, responses, validation_timeout).await?;
+    Ok(ValidationSummary { response_count, winner, replayed_to_end })
+}
+
+async fn bridge_viewer<Room: RoomProvider<ctos::Message, Complex<stoc::Message>>>(room: &mut Room, wait: Option<u16>) -> Result<(), ReconstructionError> {
+    match wait {
+        Some(port) => {
+            let listener = TcpListener::bind(("0.0.0.0", port)).await.map_err(ReconstructionError::Io)?;
+            log::info!("waiting for a viewer to join on port {port}");
+            let (socket, viewer_addr) = listener.accept().await.map_err(ReconstructionError::Io)?;
+            log::info!("viewer connected: {viewer_addr}");
+            bridge_observer(room, socket);
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+fn bridge_observer<Room: RoomProvider<ctos::Message, Complex<stoc::Message>>>(room: &mut Room, socket: TcpStream) {
+    let (viewer_reader, viewer_writer) = socket.into_split();
     let codec = LengthDelimitedCodec::builder()
         .length_field_length(2)
         .little_endian()
         .new_codec();
-    let (client_to_server_sender, client_to_server_receiver) = mpsc::unbounded_channel();
-    let client_to_server_codec = codec.clone();
-    tokio::spawn(async move {
-        let mut frames = FramedRead::new(viewer_reader, client_to_server_codec);
-        while let Some(frame) = frames.next().await {
-            if let Ok(frame) = frame {
-                let mut cursor = Cursor::new(frame);
-                if let Ok(message) = ctos::Message::read_le(&mut cursor) {
-                    client_to_server_sender.send(message).ok();
-                }
-            }
-        }
+    let client_to_server_stream = FramedRead::new(viewer_reader, codec.clone()).filter_map(|result| {
+        let frame = result.ok()?;
+        let mut cursor = Cursor::new(frame);
+        ctos::Message::read_le(&mut cursor).ok()
     });
-    let mut server_to_client_stream = host.add(UnboundedReceiverStream::new(client_to_server_receiver));
+    let mut server_to_client_stream = room.add(client_to_server_stream);
     tokio::spawn(async move {
         let mut sink = FramedWrite::new(viewer_writer, codec);
         while let Some(message) = server_to_client_stream.next().await {
@@ -114,135 +173,7 @@ fn bridge_observer(host: &mut SingleDuelHost, socket: TcpStream) {    let (viewe
     });
 }
 
-pub async fn validate_replay(path: &Path, wait_port: Option<u16>, timeout_seconds: u64) -> Result<ValidationSummary, ValidationError> {
-    let validation_timeout = Duration::from_secs(timeout_seconds);
-    ygopro::init();
-    let bytes = std::fs::read(path).map_err(ValidationError::Io)?;
-    let replay = Replay::read_le(&mut Cursor::new(bytes)).map_err(ValidationError::Parse)?;
-    if replay.is_tag() {
-        return Err(ValidationError::TagReplayNotSupported);
-    }
-    let response_count = replay.body.datas.len();
-    if response_count == 0 {
-        return Err(ValidationError::EmptyReplay);
-    }
-
-    let data_manager = data_manager::load();
-    let data_manager = data_manager.as_ref().expect("data manager is not initialized");
-    check_deck_cards(&replay.body.host_deck, data_manager)?;
-    check_deck_cards(&replay.body.client_deck, data_manager)?;
-
-    let mut configuration = Configuration::default();
-    configuration.no_init_shuffle_deck = true;
-    configuration.no_mask = true;
-
-    let started = timeout(START_GAME_TIMEOUT, start_game(&replay, configuration)).await
-        .map_err(|_| ValidationError::Timeout)??;
-    let StartedDuel {
-        player1_ctos_sender,
-        mut player1_stoc,
-        player2_ctos_sender,
-        mut player2_stoc,
-        mut host,
-        duel_task,
-    } = started;
-    let _duel_abort_guard = DuelAbortGuard(duel_task);
-
-    let mut responses: VecDeque<Response> = replay.body.datas.into_iter().map(|data| data.data).collect();
-    let mut saw_win = false;
-    let mut replayed_to_end = false;
-    let mut winner = None;
-
-    if let Some(port) = wait_port {
-        let listener = TcpListener::bind(("0.0.0.0", port))
-            .await
-            .expect("failed to bind the viewer port");
-        log::info!("waiting for a viewer to join on port {port}");
-        let (socket, viewer_addr) = listener.accept().await.expect("failed to accept the viewer");
-        log::info!("viewer connected: {viewer_addr}");
-        bridge_observer(&mut host, socket);
-    }
-
-    timeout(validation_timeout, async {
-        loop {
-            tokio::select! {
-                message = player1_stoc.next() => match message {
-                    Some(message) => {
-                        log::debug!("player1 S← {:?}", message.deref());
-                        match handle_stoc(&message, &player1_ctos_sender, &mut responses, &mut saw_win, &mut winner)? {
-                            Outcome::Continue => (),
-                            Outcome::DuelEnded => break,
-                            Outcome::ReplayEnded => {
-                                replayed_to_end = true;
-                                break;
-                            }
-                        }
-                    }
-                    None => return Err(ValidationError::DuelDidNotEnd),
-                },
-                message = player2_stoc.next() => match message {
-                    Some(message) => {
-                        log::debug!("player2 S← {:?}", message.deref());
-                        match handle_stoc(&message, &player2_ctos_sender, &mut responses, &mut saw_win, &mut winner)? {
-                            Outcome::Continue => (),
-                            Outcome::DuelEnded => break,
-                            Outcome::ReplayEnded => {
-                                replayed_to_end = true;
-                                break;
-                            }
-                        }
-                    }
-                    None => return Err(ValidationError::DuelDidNotEnd),
-                },
-            }
-        }
-        if !saw_win && !replayed_to_end {
-            return Err(ValidationError::NoWin);
-        }
-        if !responses.is_empty() {
-            return Err(ValidationError::LeftoverResponses(responses.len()));
-        }
-        Ok(())
-    }).await.map_err(|_| ValidationError::Timeout)??;
-
-    Ok(ValidationSummary { response_count, winner, replayed_to_end })
-}
-
-fn handle_stoc(
-    message: &Complex<stoc::Message>,
-    ctos_sender: &mpsc::UnboundedSender<ctos::Message>,
-    responses: &mut VecDeque<Response>,
-    saw_win: &mut bool,
-    winner: &mut Option<Netplayer>,
-) -> Result<Outcome, ValidationError> {
-    match message.deref() {
-        stoc::Message::GameMessage(game_message) => match &game_message.message {
-            gm::Message::Win(win) => {
-                *saw_win = true;
-                *winner = match win.winner {
-                    CorePlayer::FirstAttackPlayer => Some(Netplayer::Player(0)),
-                    CorePlayer::SecondAttackPlayer => Some(Netplayer::Player(1)),
-                    _ => None,
-                };
-            }
-            gm::Message::Retry(_) => return Err(ValidationError::Retry),
-            current_message if current_message.waiting_for().is_some() => {
-                let Some(response) = responses.pop_front() else {
-                    return Ok(Outcome::ReplayEnded);
-                };
-                log::debug!("C→ response {:?}", response);
-                ctos_sender.send(ctos::Message::Response(ctos::Response { response })).ok();
-            }
-            _ => (),
-        },
-        stoc::Message::DuelEnd(_) => return Ok(Outcome::DuelEnded),
-        stoc::Message::ErrorMessage(_) => return Err(ValidationError::ServerRejected),
-        _ => (),
-    }
-    Ok(Outcome::Continue)
-}
-
-fn check_deck_cards(replay_deck: &ReplayDeck, data_manager: &DataManager) -> Result<(), ValidationError> {
+fn check_deck_cards(replay_deck: &ReplayDeck, data_manager: &DataManager) -> Result<(), ReconstructionError> {
     let missing_cards: Vec<u32> = replay_deck
         .main
         .iter()
@@ -253,6 +184,6 @@ fn check_deck_cards(replay_deck: &ReplayDeck, data_manager: &DataManager) -> Res
     if missing_cards.is_empty() {
         Ok(())
     } else {
-        Err(ValidationError::MissingCards(missing_cards))
+        Err(ReconstructionError::MissingCards(missing_cards))
     }
 }

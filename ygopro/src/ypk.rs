@@ -10,7 +10,7 @@ pub mod archive_manager {
     use zip::ZipArchive;
 
     struct ExpansionArchive {
-        path: PathBuf,
+        _path: PathBuf,
         archive_reader: Mutex<ZipArchive<fs::File>>,
     }
 
@@ -44,7 +44,7 @@ pub mod archive_manager {
             };
             match ZipArchive::new(file) {
                 Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
-                    path: pack_path,
+                    _path: pack_path,
                     archive_reader: Mutex::new(archive_reader),
                 }),
                 Err(error) => log::debug!("Failed to open archive {}: {}", pack_name, error),

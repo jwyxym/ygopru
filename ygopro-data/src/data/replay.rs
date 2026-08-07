@@ -14,7 +14,7 @@ use lzma_rs::lzma_decompress_with_options;
 
 use crate::constants::Mode;
 use crate::constants::Rule;
-use crate::data::ReplayDeck;
+use crate::data::Deck;
 use crate::data::Response;
 use crate::message::HostInfo;
 use crate::utils::string::FixedLengthString;
@@ -94,6 +94,39 @@ impl ReplayHeader {
     pub fn is_decoded(&self)    -> bool { self.flag.contains(ReplayHeaderFlags::Decode) }
     pub fn is_single_mode(&self)-> bool { self.flag.contains(ReplayHeaderFlags::SingleMode) }
     pub fn is_uniform(&self)    -> bool { self.flag.contains(ReplayHeaderFlags::Uniform) }
+}
+
+#[binrw]
+#[derive(PartialEq, Eq, Debug, Clone, Default)]
+pub struct ReplayDeck {
+    #[bw(calc = main.len() as u32)]
+    main_size: u32,
+    #[br(count = main_size)]
+    pub main: Vec<u32>,
+    #[bw(calc = extra.len() as u32)]
+    extra_size: u32,
+    #[br(count = extra_size)]
+    pub extra: Vec<u32>,
+}
+
+impl From<Deck> for ReplayDeck {
+    fn from(value: Deck) -> Self {
+        let mut main = value.main;
+        let mut extra = value.extra;
+        main.reverse();
+        extra.reverse();
+        Self { main, extra }
+    }
+}
+
+impl From<ReplayDeck> for Deck {
+    fn from(value: ReplayDeck) -> Self {
+        let mut main = value.main.clone();
+        let mut extra = value.extra.clone();
+        main.reverse();
+        extra.reverse();
+        Self { main, side: vec![], extra }
+    }
 }
 
 #[binrw]

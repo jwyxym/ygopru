@@ -1774,6 +1774,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ygopro-external-server-bridge"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "binrw",
+ "bytes",
+ "futures",
+ "log",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "ygopro-core-wrapper",
+ "ygopro-data",
+ "ygopro-handler",
+]
+
+[[package]]
 name = "ygopro-handler"
 version = "0.1.0"
 dependencies = [
@@ -1793,12 +1810,13 @@ dependencies = [
 name = "ygopro-toolkits"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "binrw",
+ "bytes",
  "clap",
  "futures",
  "glob",
  "log",
- "parking_lot",
  "pretty_env_logger",
  "thiserror 1.0.53",
  "tokio",
@@ -1807,6 +1825,7 @@ dependencies = [
  "ygopro",
  "ygopro-core-wrapper",
  "ygopro-data",
+ "ygopro-external-server-bridge",
  "ygopro-handler",
 ]
 

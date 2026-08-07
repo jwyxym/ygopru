@@ -25,6 +25,7 @@ use ygopro_handler::FromRequest;
 use ygopro_handler::MessageKey;
 
 use crate::common;
+use crate::common::Configuration;
 use crate::common::Response;
 use crate::common::SendTarget;
 use crate::common::State;
@@ -34,33 +35,6 @@ pub fn init() {
     ygocore_handlers::reset_processor(); 
 }
 
-pub struct Configuration {
-    pub no_mask: bool,
-    pub no_init_shuffle_deck: bool,
-    pub allow_join_after_start: bool,
-    pub seed_generator: Option<fn(u8) -> core::DuelSeed>,
-    pub override_best_of: u8,
-    // I don't like this field while most of these fields should be implemented in srvpro instead of ygopro.
-    // So this field is only recorded here and will not get a implementation.
-    pub replay_mode: ReplayMode,
-    /// Extra scripts preloaded into every core duel after creation.
-    /// Mirrors preload_script(pduel, "./script/special.lua") in ../ygopro/gframe/single_duel.cpp:583.
-    pub preloaded_scripts: Vec<String>,
-}
-
-impl Default for Configuration {
-    fn default() -> Self {
-        Self {
-            no_mask: false,
-            no_init_shuffle_deck: false,
-            allow_join_after_start: true,
-            seed_generator: None,
-            override_best_of: 0,
-            replay_mode: ReplayMode::empty(),
-            preloaded_scripts: vec!["./script/special.lua".to_string()]
-        }
-    }
-}
 
 pub enum Request {
     Join { stoc_sender: mpsc::UnboundedSender<Complex<stoc::Message>> },
@@ -186,10 +160,6 @@ impl<State, Res> FromRequest<common::Request, State, Res> for PlayerIndex where 
     }
 }
 
-fn default_seed_generator(_match_count: u8) -> core::DuelSeed {
-    return core::DuelSeed::None
-}
-
 struct SingleDuel {
     duel: common::Duel,
     players: [Option<DuelPlayer>; 2], 
@@ -207,6 +177,7 @@ struct SingleDuel {
     phase: Phase,
     deck_reversed: bool,
     turn_player: CorePlayer,
+    last_select_message: Option<gm::Message>,
     // extended by rust ygopro
     response_buffer: BytesMut,
     core_request_buffer: BytesMut,
@@ -224,15 +195,15 @@ struct SingleDuel {
 }
 
 impl SingleDuel {
-    pub fn new(host_info: HostInfo, configuration: Configuration) -> Self {
-        let seed_generator = configuration.seed_generator.unwrap_or(default_seed_generator);
+    pub fn new(host_info: HostInfo, mut configuration: Configuration) -> Self {
+        let seed = configuration.seed(0);
         let (request_sender, request_receiver) = mpsc::unbounded_channel();
         Self {
             duel: common::Duel {
                 host_player: Netplayer::Unknown,
                 host_info,
                 stage: DuelStage::Begin,
-                duel: core::Duel::new(seed_generator(0)),
+                duel: core::Duel::new(seed),
                 name: FixedLengthString::allocate(),
                 pass: FixedLengthString::allocate(),
             },
@@ -244,6 +215,7 @@ impl SingleDuel {
             phase: Phase::Draw,
             deck_reversed: false,
             turn_player: CorePlayer::FirstAttackPlayer,
+            last_select_message: None,
             match_kill_card_code: 0,
             duel_count: 0,
             duel_winner: Vec::new(),
@@ -296,8 +268,8 @@ impl SingleDuel {
                         }
                     },
                     Request::Message(request) => {
-                        if ! duel.get_player(request.extra).map(|p| p.allow_message(&request.message)).unwrap_or(true) {
-                            warn!("Message type mismatch for player: {:?}, get {:?}", request.extra, ctos::MessageType::from(&request.message));
+                        if let Some(Some(allowed)) = duel.get_player(request.extra).map(|p| p.allow_message(&request.message)) {
+                            warn!("Message type mismatch for player: {:?}, get {:?}, expected {:?}", request.extra, ctos::MessageType::from(&request.message), allowed);
                             continue;
                         }
                         let state = common::State { duel };
@@ -328,9 +300,15 @@ impl SingleDuel {
                         let messages = ygocore_handlers::evolve(&mut duel);
                         if let Some(core_player) = messages.last().and_then(|m| m.waiting_for()) {
                             ygocore_handlers::set_waiting(&mut duel, core_player);
+                        } else if messages.last().is_some_and(|m| matches!(m, gm::Message::Retry(_))) {
+                            duel.client_responses.pop();
+                            if let Some(core_player) = duel.last_response.map(|player| duel.to_core_player(player)) {
+                                ygocore_handlers::set_waiting(&mut duel, core_player);
+                            }
                         }
                         for message in messages {
                             let key = message.message_key();
+                            if gm::MessageType::from(&message) == gm::MessageType::Retry && duel.configuration.terminate_when_retry { break; }
                             let request = ygocore_handlers::Request { message, extra: Netplayer::Unknown };
                             let state = common::State { duel };
                             let bundle = Bundle { request, state, response: Default::default() };
@@ -461,8 +439,8 @@ impl SingleDuel {
         if self.host_info.no_shuffle_deck {
             duel_options.insert(DuelOptions::PseudoShuffle);
         }
-        let host_deck = (&host_player.deck).into();
-        let client_deck = (&client_player.deck).into();
+        let host_deck = host_player.deck.clone().into();
+        let client_deck = client_player.deck.clone().into();
         let datas: Vec<ReplayData> = self.client_responses.iter().map(|response| ReplayData {
             data: response.response.clone(),
         }).collect();
@@ -550,7 +528,7 @@ impl SingleDuel {
             self.send(stoc::ChangeSide.into(), SendTarget::AllPlayer);
             self.send(stoc::WaitingSide.into(), SendTarget::AllObserver);
             self.end();
-            self.duel.duel = ygopro_core_wrapper::Duel::new((self.configuration.seed_generator.unwrap_or(default_seed_generator))(self.duel_count));
+            self.duel.duel = ygopro_core_wrapper::Duel::new(self.configuration.seed(self.duel_count));
             // self.messages.clear();
             // self.masked_messages.clear();
             self.client_responses.clear();
@@ -619,6 +597,7 @@ impl SingleDuel {
         let is_waiting_for = message.waiting_for();
         let can_player_0_see_unmasked = !message.should_mask(self.to_core_player(PlayerIndex::Player1));
         let can_player_1_see_unmasked = !message.should_mask(self.to_core_player(PlayerIndex::Player2));
+        if is_waiting_for.is_some() { self.last_select_message = Some(message.clone()) }
         let masked_message = if self.configuration.no_mask { message.clone() } else { message.clone_masked() };
         let message = Complex::from_message(stoc::Message::GameMessage(stoc::GameMessage { message }));
         let masked_message = Complex::from_message(stoc::Message::GameMessage(stoc::GameMessage { message: masked_message }));
@@ -791,7 +770,8 @@ mod ygopro_handlers {
     use ygopro_data::data::DuelOptions;
     use ygopro_data::data::QueryData;
     use ygopro_data::data::UpdateCardInfo;
-    use ygopro_data::message::{ctos, stoc, gm};
+    use ygopro_data::message::gm::GameMessage;
+use ygopro_data::message::{ctos, stoc, gm};
     use ygopro_derive::handler;
     use ygopro_derive::register_to;
     use ygopro_handler::Bundle;
@@ -800,7 +780,8 @@ mod ygopro_handlers {
     use crate::common;
     use crate::common::Response;
     use crate::common::SendTarget;
-    use crate::managers::*;
+    use crate::common::response_is_meaningful;
+use crate::managers::*;
     use crate::single_duel::PlayerIndex;
     use crate::single_duel::SingleDuel;
 
@@ -841,6 +822,25 @@ mod ygopro_handlers {
         duel.set_responseb(&duel.response_buffer);
         if let Some(duel_player) = duel.get_player_mut_index(player) {
             duel_player.state = Some(ctos::MessageType::LeaveGame);
+        }
+        if duel.host_info.time_limit > 0 {
+            let time_elapsed = duel.time_elapsed;
+            duel.time_elapsed = 0;
+            if let Some(duel_player) = duel.get_player_mut_index(player) {
+                duel_player.time_limit = duel_player.time_limit.saturating_sub(time_elapsed);
+            }
+        }
+        if let Some(last_select_message) = &duel.last_select_message && response_is_meaningful(&response.response, last_select_message) {
+            let add_time = duel.configuration.add_time_after_operation;
+            let add_deposit = duel.configuration.add_small_time_deposit_after_operation;
+            let time_limit = duel.host_info.time_limit;
+            if let Some(duel_player) = duel.get_player_mut_index(player) {
+                if duel_player.time_backed > 0 && duel_player.time_limit < time_limit {
+                    duel_player.time_limit = duel_player.time_limit.saturating_add(add_time);
+                    duel_player.time_compensator = duel_player.time_compensator.saturating_add(add_deposit);
+                    duel_player.time_backed = duel_player.time_backed.saturating_sub(add_time);
+                }
+            }
         }
         duel.request_sender.send(super::Request::Evolve).ok();
     }
@@ -903,7 +903,7 @@ mod ygopro_handlers {
         duel.set_player_info(CorePlayer::SecondAttackPlayer, duel.host_info.start_lp as i32, duel.host_info.start_hand as i32, duel.host_info.draw_count as i32);
         for script in &duel.configuration.preloaded_scripts {
             if duel.preload_script(script) == 0 {
-                warn!("Failed to preload script: {script}");
+                log::debug!("Failed to preload script: {script}");
             }
         }
         if !(duel.host_info.no_shuffle_deck || duel.configuration.no_init_shuffle_deck) {
@@ -963,10 +963,10 @@ mod ygopro_handlers {
             let player2 = match player2[0].as_mut() { Some(p) => p, None => return };
             player1.time_limit = time_limit;
             player2.time_limit = time_limit;
-            player1.time_backed = time_limit;
-            player2.time_backed = time_limit;
-            player1.time_compensator = time_limit;
-            player2.time_compensator = time_limit;
+            player1.time_backed = if duel.configuration.max_add_time_each_turn == 0 { if duel.configuration.add_time_after_operation > 0 { time_limit } else { 0 } } else { duel.configuration.max_add_time_each_turn };
+            player2.time_backed = if duel.configuration.max_add_time_each_turn == 0 { if duel.configuration.add_time_after_operation > 0 { time_limit } else { 0 } } else { duel.configuration.max_add_time_each_turn };
+            player1.time_compensator = 0;
+            player2.time_compensator = 0;
             duel.start_timer();
         }
         duel.request_sender.send(super::Request::Evolve).ok();
@@ -1180,6 +1180,9 @@ mod ygopro_handlers {
                     warn!("LeaveGame requested by unknown observer");
                 } else {
                     duel.observers[index] = None;
+                    while duel.observers.last().is_none() {
+                        duel.observers.pop();
+                    }
                     if duel.stage == DuelStage::Begin {
                         let observer_count = duel.observer_count();
                         duel.send(stoc::HsWatchChange { watch_count: observer_count }.into(), SendTarget::All);
@@ -1209,7 +1212,20 @@ mod ygopro_handlers {
             }
             Netplayer::Unknown => {}
         }
-        false
+        match duel.configuration.terminate_when {
+            SendTarget::Single(netplayer) => {
+                match netplayer {
+                    Netplayer::Player(index) => duel.players.get(index as usize).map_or(true, Option::is_none),
+                    Netplayer::Observer(index) => duel.observers.get(index as usize).map_or(true, Option::is_none),
+                    Netplayer::Unknown => { warn!("set terminate condition to unknown player"); duel.players[0].is_none() && duel.players[1].is_none() && duel.observers.is_empty() },
+                }
+            },
+            SendTarget::Except(_) => { warn!("set terminate condition to not supported except"); duel.players[0].is_none() && duel.players[1].is_none() && duel.observers.is_empty() },
+            SendTarget::All => duel.players[0].is_none() && duel.players[1].is_none() && duel.observers.is_empty(),
+            SendTarget::AllPlayer => duel.players[0].is_none() && duel.players[1].is_none(),
+            SendTarget::AllObserver => duel.observers.is_empty(),
+            SendTarget::None => { warn!("a room is set to terminate in no case. this mean this room will be eternal."); false },
+        }
     }
 
     #[handler(ctos::HsStart)]
@@ -1283,13 +1299,14 @@ mod ygopro_handlers {
             warn!("TimeConfirm requested by wrong player");
             return;
         }
+        let ignore_duration = duel.configuration.ignore_small_time_under_this_duration;
         let time_elapsed = duel.time_elapsed;
         let Some(duel_player) = duel.get_player_mut_index(index) else {
             warn!("TimeConfirm requested but player slot is empty");
             return;
         };
         duel_player.state = Some(ctos::MessageType::Response);
-        if time_elapsed < 10 && time_elapsed <= duel_player.time_compensator {
+        if time_elapsed < ignore_duration && time_elapsed <= duel_player.time_compensator {
             duel_player.time_compensator -= time_elapsed;
         } else {
             duel_player.time_limit = duel_player.time_limit.saturating_sub(time_elapsed);
@@ -1339,8 +1356,8 @@ mod ygopro_handlers {
         if !no_check_deck {
             let deck_manager = deck_manager::load();
             let data_manager = data_manager::load();
-            let lflist = deck_manager.as_ref().and_then(|dm| dm.get_lflist(lflist_index));
-            let (Some(lflist), Some(data_manager)) = (lflist, data_manager.as_ref()) else { return vec![]; };
+            let Some(data_manager) = data_manager.as_ref() else { return vec![]; };
+            let lflist = deck_manager.as_ref().and_then(|dm| dm.get_lflist(lflist_index)).cloned().unwrap_or_else(|| ygopro_data::data::LFList::new(String::new(), std::collections::HashMap::new()));
             if let Err(deck_error) = duel_player.deck.prepare(&lflist, rule, |code| data_manager.get_card(code)) {
                 duel.send(stoc::HsPlayerChange { status: PlayerChange::new()
                     .with_state(PlayerChangeState::Notready)
@@ -1420,7 +1437,7 @@ mod ygopro_handlers {
         let mut messages = vec![];
         messages.push(stoc::DuelStart.into());
 
-        let player_type: u8 = player as u8;
+        let player_type: u8 = duel.to_core_player(player) as u8;
         let start_lp = duel.host_info.start_lp as i32;
         messages.push(stoc::GameMessage {
             message: gm::Message::Start(gm::Start {
@@ -1455,10 +1472,12 @@ mod ygopro_handlers {
         let core_player = duel.to_core_player(player);
         let opponent = core_player.opponent();
         for location in [Location::MZone, Location::SZone, Location::Hand, Location::Grave, Location::Extra, Location::Removed] {
-            for cp in [opponent, core_player] {
-                for gm_message in duel.duel.refresh_location(&mut duel.core_request_buffer, cp, location, Query::all()) {
-                    messages.push(stoc::GameMessage { message: gm_message }.into());
-                }
+            for mut gm_message in duel.duel.refresh_location(&mut duel.core_request_buffer, opponent, location, Query::all()) {
+                if !duel.configuration.no_mask { gm_message.mask(); }
+                messages.push(stoc::GameMessage { message: gm_message }.into());
+            }
+            for gm_message in duel.duel.refresh_location(&mut duel.core_request_buffer, core_player, location, Query::all()) {
+                messages.push(stoc::GameMessage { message: gm_message }.into());
             }
         }
 
@@ -1496,6 +1515,9 @@ mod ygopro_handlers {
         }
 
         messages.push(stoc::FieldFinish.into());
+        if let Some(message) = &duel.last_select_message && duel.last_response.unwrap_or(duel.to_player_index(CorePlayer::FirstAttackPlayer).unwrap_or(PlayerIndex::Player1)) == player {
+           messages.push(stoc::GameMessage { message: message.clone() }.into());
+        }
         messages
     }
 }
@@ -1624,7 +1646,7 @@ mod ygocore_handlers {
             // we should use engine_flag is Flags::Waiting to check if need continue.
             // but sadly, ygocore will incorrectly send waiting even need to continue.
             // so just like original ygopro do, we check specific message here.
-            if messages.last().map_or(false, |m| m.waiting_for().is_some()) { break; }
+            if messages.last().map_or(false, |m| m.waiting_for().is_some() || matches!(m, gm::Message::Retry(_))) { break; }
         }
         messages
     }
@@ -1826,10 +1848,11 @@ mod ygocore_handlers {
     fn on_new_turn(duel: &mut SingleDuel, message: &gm::NewTurn) -> (CorePlayer, Location) {
         duel.turn_player = message.player;
         let time_limit = duel.host_info.time_limit;
+        let time_backed = if duel.configuration.max_add_time_each_turn == 0 { if duel.configuration.add_time_after_operation > 0 { time_limit } else { 0 } } else { duel.configuration.max_add_time_each_turn };
         for duel_player in duel.players.iter_mut().flatten() {
             duel_player.time_limit = time_limit;
-            duel_player.time_compensator = time_limit;
-            duel_player.time_backed = time_limit;
+            duel_player.time_compensator = 0;
+            duel_player.time_backed = time_backed;
         }
         (CorePlayer::All, Location::MZone | Location::SZone | Location::Hand)
     }

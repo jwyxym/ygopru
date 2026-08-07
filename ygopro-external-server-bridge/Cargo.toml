@@ -1,0 +1,22 @@
+[package]
+name = "ygopro-external-server-bridge"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "ygopro_external_server_bridge"
+path = "src/room_provider.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tokio-stream = "0.1"
+binrw = "0.13"
+futures = "0.3"
+bytes = "1"
+base64 = "0.22"
+log = "0.4"
+
+ygopro-core-wrapper = { path = "../ygopro-core-wrapper" }
+ygopro-data = { path = "../ygopro-data" }
+ygopro-handler = { path = "../ygopro-handler" }

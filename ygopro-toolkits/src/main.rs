@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use glob::glob;
 
 mod proxy;
-mod start_game;
+mod common;
+mod tsukuyomi;
 mod validate_replay;
 
 #[derive(Parser)]
@@ -29,6 +29,26 @@ enum Commands {
         /// Validation timeout in seconds
         #[arg(long, default_value_t = 5)]
         timeout: u64,
+        /// ygopro-server binary to validate against instead of the in-process engine
+        #[arg(long, requires = "server_cwd")]
+        server_bin: Option<PathBuf>,
+        /// Working directory the ygopro-server is launched in (defaults to the directory containing the server binary)
+        #[arg(long, requires = "server_bin")]
+        server_cwd: Option<PathBuf>,
+    },
+    /// Replay takeover arena. Serve a replay's terminal scene to two takeover players, forever.
+    Tsukuyomi {
+        /// Replay (.yrp) file to build the scene from
+        path: PathBuf,
+        /// Listen port for the takeover players
+        #[arg(short, long, default_value_t = 7911)]
+        port: u16,
+        /// ygopro-server binary to validate against instead of the in-process engine
+        #[arg(long, requires = "server_cwd")]
+        server_bin: Option<PathBuf>,
+        /// Working directory the ygopro-server is launched in
+        #[arg(long, requires = "server_bin")]
+        server_cwd: Option<PathBuf>,
     },
     /// Logging proxy middleware.
     Proxy {
@@ -47,50 +67,14 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::ValidateReplay { path, wait, timeout } => {
-            let mut paths = Vec::new();
-            for pattern in &path {
-                match glob(&pattern.to_string_lossy()) {
-                    Ok(matches) => paths.extend(matches.filter_map(Result::ok)),
-                    Err(error) => {
-                        log::error!("cannot parse pattern {}: {error}", pattern.display());
-                        std::process::exit(1);
-                    }
-                }
-            }
-            if paths.is_empty() {
-                log::error!("no replay files matched");
-                std::process::exit(1);
-            }
-            let single_file = paths.len() == 1;
-            let mut failed_count = 0;
-            for path in paths {
-                let wait = if single_file { wait } else { None };
-                match validate_replay::validate_replay(&path, wait, timeout).await {
-                    Ok(summary) => {
-                        let winner_text = match summary.winner {
-                            Some(winner) => format!("{winner:?}"),
-                            None if summary.replayed_to_end => "unknown (surrendered)".to_string(),
-                            None => "draw".to_string(),
-                        };
-                        log::info!(
-                            "{}: replay is valid: {} responses replayed, winner: {winner_text}",
-                            path.display(),
-                            summary.response_count
-                        );
-                    }
-                    Err(error) => {
-                        log::error!("{}: replay is invalid: {error}", path.display());
-                        failed_count += 1;
-                    }
-                }
-            }
-            if failed_count > 0 {
-                std::process::exit(1);
-            }
+        Commands::ValidateReplay { path, wait, timeout, server_bin, server_cwd } => {
+            validate_replay::run(&path, wait, timeout, server_bin, server_cwd).await;
+        }
+        Commands::Tsukuyomi { path, port, server_bin, server_cwd } => {
+            tsukuyomi::run(&path, port, server_bin, server_cwd).await;
         }
         Commands::Proxy { target, port } => {
-            proxy::run_proxy(target, port).await;
+            proxy::run(target, port).await;
         }
     }
 }

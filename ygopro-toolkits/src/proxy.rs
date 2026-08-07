@@ -14,7 +14,7 @@ use tokio_util::codec::FramedWrite;
 use tokio_util::codec::LengthDelimitedCodec;
 use ygopro_data::message::{client_to_server, server_to_client};
 
-pub async fn run_proxy(target: SocketAddr, port: u32) {
+pub async fn run(target: SocketAddr, port: u32) {
     let server_addr: SocketAddr = format!("0.0.0.0:{port}")
         .parse()
         .expect("Cannot parse the listening socket.");

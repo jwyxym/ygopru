@@ -183,7 +183,7 @@ pub mod data_manager {
         0
     }
 
-    /// Corresponds to `ScriptReaderEx` in data_manager.cpp:515-553.
+    /// Corresponds to `ScriptReaderEx` in data_manager.cpp:493-517.
     pub extern "C" fn script_reader(script_path: *const c_char, slen: *mut c_int) -> *mut u8 {
         fn read_file(file_path: &str, buffer: &mut [u8]) -> Option<usize> {
             fs::read(file_path).ok().and_then(|data| {
@@ -211,27 +211,47 @@ pub mod data_manager {
         let path = unsafe { CStr::from_ptr(script_path).to_string_lossy() };
         let mut buffer = SCRIPT_BUFFER.lock();
 
-        if path.starts_with("./script") {
-            let filename = &path[9..];
-            if let Some(len) = read_file(&format!("./specials/{}", filename), &mut *buffer) {
-                unsafe { *slen = len as c_int; }
-                return buffer.as_mut_ptr();
-            }
-            if let Some(len) = read_file(&format!("./expansions/{}", &path[2..]), &mut *buffer) {
-                unsafe { *slen = len as c_int; }
-                return buffer.as_mut_ptr();
-            }
+        if !path.starts_with("./script") {
             if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
+                unsafe { *slen = len as c_int; }
+                return buffer.as_mut_ptr();
+            }
+            return std::ptr::null_mut();
+        }
+
+        let script_name = &path[2..];
+        let expansions_path = format!("./expansions/{}", script_name);
+        let prefer_expansion_script = super::config_manager::load()
+            .as_ref()
+            .and_then(|config_manager| config_manager.get("prefer_expansion_script"))
+            .map(|value| value.trim() != "0")
+            .unwrap_or(false);
+
+        if prefer_expansion_script {
+            if let Some(len) = read_file(&expansions_path, &mut *buffer) {
                 unsafe { *slen = len as c_int; }
                 return buffer.as_mut_ptr();
             }
             #[cfg(feature = "zip")]
-            if let Some(len) = read_archive(&path[2..], &mut *buffer) {
+            if let Some(len) = read_archive(script_name, &mut *buffer) {
+                unsafe { *slen = len as c_int; }
+                return buffer.as_mut_ptr();
+            }
+            if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
                 unsafe { *slen = len as c_int; }
                 return buffer.as_mut_ptr();
             }
         } else {
+            #[cfg(feature = "zip")]
+            if let Some(len) = read_archive(script_name, &mut *buffer) {
+                unsafe { *slen = len as c_int; }
+                return buffer.as_mut_ptr();
+            }
             if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
+                unsafe { *slen = len as c_int; }
+                return buffer.as_mut_ptr();
+            }
+            if let Some(len) = read_file(&expansions_path, &mut *buffer) {
                 unsafe { *slen = len as c_int; }
                 return buffer.as_mut_ptr();
             }
@@ -433,22 +453,27 @@ pub mod config_manager {
         }
     }
 
-    pub fn get_duel_configuration() -> crate::single_duel::Configuration {
+    pub fn get_duel_configuration() -> crate::Configuration {
+        let mut configuration: crate::Configuration = Default::default();
+        let guard = load();
+        let cm = guard.as_ref().expect("config manager not inited");
         let get_value = |key: &str| -> Option<String> {
-            load().as_ref().and_then(|config_manager| config_manager.get(key).map(|value| value.to_string()))
+            cm.get(key).map(|value| value.to_string())
         };
-        crate::single_duel::Configuration {
-            no_mask: get_value("no_mask").is_some(),
-            no_init_shuffle_deck: get_value("no_init_shuffle_deck").is_some(),
-            allow_join_after_start: get_value("allow_join_after_start").map(|_| true).unwrap_or(true),
-            seed_generator: None,
-            override_best_of: get_value("override_best_of").and_then(|value| value.parse().ok()).unwrap_or(0),
-            replay_mode: ygopro_data::data::ReplayMode::empty(),
-            preloaded_scripts: get_value("preloaded_scripts")
-                .as_ref()
-                .map(|value| split_paths(value).into_iter().map(|script| script.to_string()).collect())
-                .unwrap_or_else(|| crate::single_duel::Configuration::default().preloaded_scripts),
-        }
+        configuration.no_mask = get_value("no_mask").is_some();
+        configuration.no_init_shuffle_deck = get_value("no_init_shuffle_deck").is_some();
+        configuration.allow_join_after_start = get_value("allow_join_after_start").is_some();
+        configuration.terminate_when_retry = get_value("terminate_when_retry").is_some();
+        configuration.override_best_of = get_value("override_best_of").and_then(|value| value.parse().ok()).unwrap_or(0);
+        configuration.preloaded_scripts = get_value("preloaded_scripts")
+            .as_ref()
+            .map(|value| split_paths(value).into_iter().map(|script| script.to_string()).collect())
+            .unwrap_or_else(|| crate::common::Configuration::default().preloaded_scripts);
+        configuration.add_time_after_operation = get_value("add_time_after_operation").and_then(|value| value.parse().ok()).unwrap_or(1);
+        configuration.max_add_time_each_turn = get_value("max_add_time_each_turn").and_then(|value| value.parse().ok()).unwrap_or(0);
+        configuration.ignore_small_time_under_this_duration = get_value("ignore_small_time_under_this_duration").and_then(|value| value.parse().ok()).unwrap_or(10);
+        configuration.add_small_time_deposit_after_operation = get_value("add_small_time_deposit_after_operation").and_then(|value| value.parse().ok()).unwrap_or(1);
+        configuration
     }
 }
 
