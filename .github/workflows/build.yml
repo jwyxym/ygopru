@@ -59,18 +59,27 @@ jobs:
           add-to-path: true
 
       - name: Build
-        run: cargo build --release --lib -p ygoserver --target ${{ matrix.target }}
-        env:
-          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: aarch64-linux-android21-clang
-          CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER: armv7a-linux-androideabi21-clang
-          CARGO_TARGET_I686_LINUX_ANDROID_LINKER: i686-linux-android21-clang
-          CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER: x86_64-linux-android21-clang
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
-          AR: ${{ matrix.ar }}
-          TARGET_CC: ${{ matrix.cc }}
-          TARGET_CXX: ${{ matrix.cxx }}
-          TARGET_AR: ${{ matrix.ar }}
+        run: |
+          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          if [ ! -d "$NDK_TOOLCHAIN" ]; then
+            NDK_TOOLCHAIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          fi
+          echo "Using Android NDK toolchain: $NDK_TOOLCHAIN"
+          ls "$NDK_TOOLCHAIN"/${{ matrix.cc }}
+
+          export PATH="$NDK_TOOLCHAIN:$PATH"
+          export CC="$NDK_TOOLCHAIN/${{ matrix.cc }}"
+          export CXX="$NDK_TOOLCHAIN/${{ matrix.cxx }}"
+          export AR="$NDK_TOOLCHAIN/${{ matrix.ar }}"
+          export TARGET_CC="$CC"
+          export TARGET_CXX="$CXX"
+          export TARGET_AR="$AR"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_TOOLCHAIN/aarch64-linux-android21-clang"
+          export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$NDK_TOOLCHAIN/armv7a-linux-androideabi21-clang"
+          export CARGO_TARGET_I686_LINUX_ANDROID_LINKER="$NDK_TOOLCHAIN/i686-linux-android21-clang"
+          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$NDK_TOOLCHAIN/x86_64-linux-android21-clang"
+
+          cargo build --release --lib -p ygoserver --target ${{ matrix.target }}
 
       - name: Package
         run: |
