@@ -63,7 +63,7 @@ impl Deck {
     }
 
     pub fn prepare<'a>(&mut self, lflist: &LFList, rule: Rule, resolve_card: impl Fn(u32) -> Option<&'a Card>) -> Result<(), DeckError> {
-        self.check(&lflist.content, rule, 
+        self.check(lflist, rule, 
             |c| resolve_card(c).map(|c| c.ot).unwrap_or(OT::empty()), 
             |c| resolve_card(c).map(|c| c.card_type).unwrap_or(Type::empty()),
             |c| resolve_card(c).map(|c| c.duel_code()).unwrap_or(0))
@@ -82,7 +82,7 @@ impl Deck {
         separate_main_and_extra(&mut self.main, &mut self.extra, resolve_type);
     }
 
-    pub fn check(&self, lflist: &HashMap<u32, u8>, rule: Rule, get_rule: impl Fn(u32) -> OT, get_type: impl Fn(u32) -> Type, resolve_code: impl Fn(u32) -> u32) -> Result<(), DeckError> {
+    pub fn check(&self, lflist: &LFList, rule: Rule, get_rule: impl Fn(u32) -> OT, get_type: impl Fn(u32) -> Type, resolve_code: impl Fn(u32) -> u32) -> Result<(), DeckError> {
         check_deck_length(&self.main, &self.extra, &self.side)?;
         check_illegal_cards(&self.main, &self.side, &self.extra, get_type)?;
         let iter = self.main.iter().chain(self.extra.iter()).chain(self.side.iter());
@@ -203,19 +203,28 @@ pub fn check_rule<'a>(codes: impl Iterator<Item = &'a u32>, rule: Rule, get_rule
     Ok(())
 }
 
-pub fn check_deck_lflists<'a>(codes: impl Iterator<Item = &'a u32>, lflist: &HashMap<u32, u8>, resolve_code: impl Fn(u32) -> u32) -> Result<(), DeckError> {
+pub fn check_deck_lflists<'a>(codes: impl Iterator<Item = &'a u32>, lflist: &LFList, resolve_code: impl Fn(u32) -> u32) -> Result<(), DeckError> {
     let mut counts: HashMap<u32, u32> = HashMap::new();
     for &code in codes {
         let resolved = resolve_code(code);
         *counts.entry(resolved).or_insert(0) += 1;
     }
 
+    let mut current = 0;
     for (&code, &count) in &counts {
-        if let Some(&limit) = lflist.get(&code) {
-            if count as u8 > limit { return Err(DeckError::new().with_error_type(DeckErrorType::Lflist).with_code(code)); }
+        if count > 3 {
+            return Err(DeckError::new().with_error_type(DeckErrorType::CardCount).with_code(code));
         }
-        if count > 3 { return Err(DeckError::new().with_error_type(DeckErrorType::CardCount).with_code(code)); }
+        if lflist.genesys > 0 && let Some(&limit) = lflist.glist.get(&code) {
+            current += limit * count;
+            if current > lflist.genesys {
+                return Err(DeckError::new().with_error_type(DeckErrorType::Lflist).with_code(code));
+            }
+        }
+        if let Some(&limit) = lflist.content.get(&code)
+            && count as u8 > limit {
+                return Err(DeckError::new().with_error_type(DeckErrorType::Lflist).with_code(code));
+        }
     }
     Ok(())
 }
-

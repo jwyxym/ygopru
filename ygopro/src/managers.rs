@@ -415,6 +415,8 @@ pub mod deck_manager {
                 hash: 0,
                 name: "N/A".to_string(),
                 content: HashMap::new(),
+                genesys: 0,
+                glist: HashMap::new(),
             });
         }
         set_global(deck_manager);

@@ -135,10 +135,10 @@ impl From<ReplayDeck> for Deck {
 #[bw(import(header: &ReplayHeader))]
 pub struct ReplayBody {
     pub host_name: FixedLengthString<20>,
-    pub client_name: FixedLengthString<20>,
     #[br(if(header.is_tag()))]
     #[bw(if(header.is_tag()))]
     pub tag_host_name: Option<FixedLengthString<20>>,
+    pub client_name: FixedLengthString<20>,
     #[br(if(header.is_tag()))]
     #[bw(if(header.is_tag()))]
     pub tag_client_name: Option<FixedLengthString<20>>,
@@ -149,13 +149,13 @@ pub struct ReplayBody {
     pub duel_options: DuelOptions,
     pub duel_rule: u16,
     pub host_deck: ReplayDeck,
-    pub client_deck: ReplayDeck,
     #[br(if(header.is_tag()))]
     #[bw(if(header.is_tag()))]
     pub tag_host_deck: Option<ReplayDeck>,
     #[br(if(header.is_tag()))]
     #[bw(if(header.is_tag()))]
     pub tag_client_deck: Option<ReplayDeck>,
+    pub client_deck: ReplayDeck,
     #[br(parse_with=until_eof)]
     pub datas: Vec<ReplayData>
 }

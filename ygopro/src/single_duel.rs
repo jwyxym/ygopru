@@ -770,10 +770,11 @@ mod ygopro_handlers {
     use log::warn;
     use ygopro_data::constants::*;
     use ygopro_data::data::DuelOptions;
+    
     use ygopro_data::data::QueryData;
     use ygopro_data::data::UpdateCardInfo;
     use ygopro_data::message::gm::GameMessage;
-use ygopro_data::message::{ctos, stoc, gm};
+    use ygopro_data::message::{ctos, stoc, gm};
     use ygopro_derive::handler;
     use ygopro_derive::register_to;
     use ygopro_handler::Bundle;
@@ -783,7 +784,7 @@ use ygopro_data::message::{ctos, stoc, gm};
     use crate::common::Response;
     use crate::common::SendTarget;
     use crate::common::response_is_meaningful;
-use crate::managers::*;
+    use crate::managers::*;
     use crate::single_duel::PlayerIndex;
     use crate::single_duel::SingleDuel;
 
@@ -1029,7 +1030,7 @@ use crate::managers::*;
         if join_game.version != crate::PRO_VERSION {
             return Err(stoc::ErrorMessage { err: ErrorMessage::VersionError(crate::PRO_VERSION) }.into());
         }
-        if join_game.pass != duel.pass {
+        if !duel.pass.is_empty() && join_game.pass != duel.pass {
             return Err(stoc::ErrorMessage { err: ErrorMessage::JoinError(JoinError::WrongPassword) }.into());
         }
         if duel.last_init_player.is_none() {
@@ -1366,7 +1367,7 @@ use crate::managers::*;
             let deck_manager = deck_manager::load();
             let data_manager = data_manager::load();
             let data_manager = data_manager.as_ref().expect("unintied data manager");
-            let lflist = deck_manager.as_ref().and_then(|dm| dm.get_lflist_by_hash(lflist_hash)).cloned().unwrap_or_else(|| ygopro_data::data::LFList::new(String::new(), std::collections::HashMap::new()));
+            let lflist = deck_manager.as_ref().and_then(|dm| dm.get_lflist_by_hash(lflist_hash)).cloned().unwrap_or_else(|| ygopro_data::data::LFList::new(String::new()));
             if let Some(deck_error) = duel_player.deck_error.take() {
                 messages.push(stoc::ErrorMessage { err: ErrorMessage::DeckError(deck_error) }.into());
             }

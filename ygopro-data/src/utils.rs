@@ -74,6 +74,10 @@ pub mod string {
             }
         }
 
+        pub fn is_empty(&self) -> bool {
+            self.data.iter().all(|&x| x == 0)
+        }
+
         pub fn new(str: String) -> Self {
             let this = Self {
                 data: cast_to_fix_length_array(&str),
@@ -235,7 +239,10 @@ pub mod complex {
         pub fn from_message(message: Message) -> Self where Message: BinWrite,for<'a> <Message as BinWrite>::Args<'a>: Default {
             let mut cursor = Cursor::new(Vec::new());
             message.write_le(&mut cursor).expect("failed to serialize Complex message");
-            Self::new(Bytes::from(cursor.into_inner()))
+            Self {
+                data: Bytes::from(cursor.into_inner()),
+                message: OnceLock::from(message),
+            }
         }
 
         pub fn shadow_clone(&self) -> Self {
