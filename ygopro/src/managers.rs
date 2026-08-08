@@ -12,7 +12,7 @@ pub mod data_manager {
     use parking_lot::Mutex;
     use walkdir::WalkDir;
 
-use ygopro_data::constants::Type;
+    use ygopro_data::constants::Type;
     use ygopro_data::data::Card;
     use ygopro_data::data::CoreCard;
 
