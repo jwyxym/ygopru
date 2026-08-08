@@ -275,9 +275,10 @@ fn parse_server_arguments(arguments: &[String]) -> Result<ServerArguments, i32> 
 
     let port = arguments[0].parse().map_err(|_| START_BAD_ARGUMENTS)?;
     let duel_rule = parse_duel_rule(&arguments[4]);
+    let deck_manager = ygopro::managers::deck_manager::load();
     let host_info = HostInfo {
-        lflist: arguments[1].parse().unwrap_or(0),
-        rule: parse_rule(&arguments[2]),
+        lflist: deck_manager.as_ref().and_then(|dm| dm.get_lflist_by_index(arguments[1].parse().unwrap_or(0))).map(|l| l.hash).unwrap_or(0),
+        rule: Rule::try_from(arguments[2].parse::<u8>().unwrap_or(0)).unwrap_or(Rule::All),
         mode: parse_mode(&arguments[3]),
         duel_rule,
         no_check_deck: arguments[5] == "T",
@@ -306,17 +307,6 @@ fn parse_server_arguments(arguments: &[String]) -> Result<ServerArguments, i32> 
         i18n,
         packs
     })
-}
-
-fn parse_rule(argument: &str) -> Rule {
-    match argument.parse::<u8>().unwrap_or(5) {
-        0 => Rule::OCG,
-        1 => Rule::TCG,
-        2 => Rule::SC,
-        3 => Rule::Custom,
-        4 => Rule::OCG | Rule::TCG,
-        _ => Rule::empty(),
-    }
 }
 
 fn init(server_arguments: &ServerArguments) {
