@@ -7,13 +7,22 @@ on:
 
 jobs:
   android:
-    name: Android ${{ matrix.abi }}
+    name: Android ${{ matrix.abi }} ${{ matrix.feature }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - abi: arm64-v8a
+            feature: server_ygopro3_support
+            target: aarch64-linux-android
+            linker: aarch64-linux-android21-clang
+            cc: aarch64-linux-android21-clang
+            cxx: aarch64-linux-android21-clang++
+            ar: llvm-ar
+            output: libygoserver.so
+          - abi: arm64-v8a
+            feature: server_ygomobile_support
             target: aarch64-linux-android
             linker: aarch64-linux-android21-clang
             cc: aarch64-linux-android21-clang
@@ -21,6 +30,15 @@ jobs:
             ar: llvm-ar
             output: libygoserver.so
           - abi: armeabi-v7a
+            feature: server_ygopro3_support
+            target: armv7-linux-androideabi
+            linker: armv7a-linux-androideabi21-clang
+            cc: armv7a-linux-androideabi21-clang
+            cxx: armv7a-linux-androideabi21-clang++
+            ar: llvm-ar
+            output: libygoserver.so
+          - abi: armeabi-v7a
+            feature: server_ygomobile_support
             target: armv7-linux-androideabi
             linker: armv7a-linux-androideabi21-clang
             cc: armv7a-linux-androideabi21-clang
@@ -28,6 +46,15 @@ jobs:
             ar: llvm-ar
             output: libygoserver.so
           - abi: x86
+            feature: server_ygopro3_support
+            target: i686-linux-android
+            linker: i686-linux-android21-clang
+            cc: i686-linux-android21-clang
+            cxx: i686-linux-android21-clang++
+            ar: llvm-ar
+            output: libygoserver.so
+          - abi: x86
+            feature: server_ygomobile_support
             target: i686-linux-android
             linker: i686-linux-android21-clang
             cc: i686-linux-android21-clang
@@ -35,6 +62,15 @@ jobs:
             ar: llvm-ar
             output: libygoserver.so
           - abi: x86_64
+            feature: server_ygopro3_support
+            target: x86_64-linux-android
+            linker: x86_64-linux-android21-clang
+            cc: x86_64-linux-android21-clang
+            cxx: x86_64-linux-android21-clang++
+            ar: llvm-ar
+            output: libygoserver.so
+          - abi: x86_64
+            feature: server_ygomobile_support
             target: x86_64-linux-android
             linker: x86_64-linux-android21-clang
             cc: x86_64-linux-android21-clang
@@ -85,30 +121,40 @@ jobs:
           export CARGO_TARGET_I686_LINUX_ANDROID_LINKER="$NDK_TOOLCHAIN/i686-linux-android21-clang"
           export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$NDK_TOOLCHAIN/x86_64-linux-android21-clang"
 
-          cargo build --release --lib -p ygoserver --target ${{ matrix.target }}
+          cargo build --release --lib -p ygoserver --target ${{ matrix.target }} --features ${{ matrix.feature }}
 
       - name: Package
         run: |
-          mkdir -p dist/android/${{ matrix.abi }}
-          cp target/${{ matrix.target }}/release/${{ matrix.output }} dist/android/${{ matrix.abi }}/
+          mkdir -p dist/${{ matrix.feature }}/android/${{ matrix.abi }}
+          cp target/${{ matrix.target }}/release/${{ matrix.output }} dist/${{ matrix.feature }}/android/${{ matrix.abi }}/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ygoserver-android-${{ matrix.abi }}
-          path: dist/android/${{ matrix.abi }}/${{ matrix.output }}
+          name: ygoserver-${{ matrix.feature }}-android-${{ matrix.abi }}
+          path: dist/${{ matrix.feature }}/android/${{ matrix.abi }}/${{ matrix.output }}
 
   linux:
-    name: Linux ${{ matrix.arch }}
+    name: Linux ${{ matrix.arch }} ${{ matrix.feature }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
+            feature: server_ygopro3_support
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - arch: x86_64
+            feature: server_ygomobile_support
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - arch: arm64
+            feature: server_ygopro3_support
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - arch: arm64
+            feature: server_ygomobile_support
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
     steps:
@@ -129,29 +175,37 @@ jobs:
             . -> target
 
       - name: Build
-        run: cargo build --release --lib -p ygoserver --target ${{ matrix.target }}
+        run: cargo build --release --lib -p ygoserver --target ${{ matrix.target }} --features ${{ matrix.feature }}
 
       - name: Package
         run: |
-          mkdir -p dist/linux-${{ matrix.arch }}
-          cp target/${{ matrix.target }}/release/libygoserver.so dist/linux-${{ matrix.arch }}/
+          mkdir -p dist/${{ matrix.feature }}/linux-${{ matrix.arch }}
+          cp target/${{ matrix.target }}/release/libygoserver.so dist/${{ matrix.feature }}/linux-${{ matrix.arch }}/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ygoserver-linux-${{ matrix.arch }}
-          path: dist/linux-${{ matrix.arch }}/libygoserver.so
+          name: ygoserver-${{ matrix.feature }}-linux-${{ matrix.arch }}
+          path: dist/${{ matrix.feature }}/linux-${{ matrix.arch }}/libygoserver.so
 
   windows:
-    name: Windows ${{ matrix.arch }}
+    name: Windows ${{ matrix.arch }} ${{ matrix.feature }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
+            feature: server_ygopro3_support
+            target: x86_64-pc-windows-msvc
+          - arch: x86_64
+            feature: server_ygomobile_support
             target: x86_64-pc-windows-msvc
           - arch: arm64
+            feature: server_ygopro3_support
+            target: aarch64-pc-windows-msvc
+          - arch: arm64
+            feature: server_ygomobile_support
             target: aarch64-pc-windows-msvc
     steps:
       - name: Checkout
@@ -171,23 +225,29 @@ jobs:
             . -> target
 
       - name: Build
-        run: cargo build --release --lib -p ygoserver --target ${{ matrix.target }}
+        run: cargo build --release --lib -p ygoserver --target ${{ matrix.target }} --features ${{ matrix.feature }}
 
       - name: Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist/windows-${{ matrix.arch }} | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/ygoserver.dll dist/windows-${{ matrix.arch }}/
+          New-Item -ItemType Directory -Force -Path dist/${{ matrix.feature }}/windows-${{ matrix.arch }} | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/ygoserver.dll dist/${{ matrix.feature }}/windows-${{ matrix.arch }}/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ygoserver-windows-${{ matrix.arch }}
-          path: dist/windows-${{ matrix.arch }}/ygoserver.dll
+          name: ygoserver-${{ matrix.feature }}-windows-${{ matrix.arch }}
+          path: dist/${{ matrix.feature }}/windows-${{ matrix.arch }}/ygoserver.dll
 
   macos:
-    name: macOS universal
+    name: macOS universal ${{ matrix.feature }}
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        feature:
+          - server_ygopro3_support
+          - server_ygomobile_support
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -206,21 +266,21 @@ jobs:
             . -> target
 
       - name: Build x86_64
-        run: cargo build --release --lib -p ygoserver --target x86_64-apple-darwin
+        run: cargo build --release --lib -p ygoserver --target x86_64-apple-darwin --features ${{ matrix.feature }}
 
       - name: Build arm64
-        run: cargo build --release --lib -p ygoserver --target aarch64-apple-darwin
+        run: cargo build --release --lib -p ygoserver --target aarch64-apple-darwin --features ${{ matrix.feature }}
 
       - name: Package universal dylib
         run: |
-          mkdir -p dist/macos-universal
+          mkdir -p dist/${{ matrix.feature }}/macos-universal
           lipo -create \
             target/x86_64-apple-darwin/release/libygoserver.dylib \
             target/aarch64-apple-darwin/release/libygoserver.dylib \
-            -output dist/macos-universal/libygoserver.dylib
+            -output dist/${{ matrix.feature }}/macos-universal/libygoserver.dylib
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ygoserver-macos-universal
-          path: dist/macos-universal/libygoserver.dylib
+          name: ygoserver-${{ matrix.feature }}-macos-universal
+          path: dist/${{ matrix.feature }}/macos-universal/libygoserver.dylib

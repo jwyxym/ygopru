@@ -1714,6 +1714,7 @@ dependencies = [
  "binrw",
  "bytes",
  "futures",
+ "glob",
  "hashbrown 0.17.1",
  "linkme",
  "log",

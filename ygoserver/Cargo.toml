@@ -28,3 +28,7 @@ binrw = "0.13"
 futures = "0.3"
 hashbrown = "0.17.1"
 parking_lot = { version = "0", features = ["arc_lock", "send_guard"] }
+
+[features]
+server_ygopro3_support = ["ygopro/server_ygopro3_support"]
+server_ygomobile_support = ["ygopro/server_ygomobile_support"]

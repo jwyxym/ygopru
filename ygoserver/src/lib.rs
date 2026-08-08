@@ -321,8 +321,10 @@ fn init(server_arguments: &ServerArguments) {
 fn configure_resource_paths(server_arguments: &ServerArguments) {
     let mut entries: HashMap<String, String> = HashMap::new();
     entries.insert("path".to_string(), server_arguments.base_path.clone());
-    entries.insert("i18n".to_string(), server_arguments.i18n.clone());
-	entries.insert("pack_names".to_string(), server_arguments.packs.clone());
+    #[cfg(feature = "server_ygopro3_support")] {
+        entries.insert("i18n".to_string(), server_arguments.i18n.clone());
+        entries.insert("pack_names".to_string(), server_arguments.packs.clone());
+    }
 	let config = managers::config_manager::ConfigManager::from(entries);
     managers::config_manager::set_global(config);
 }
