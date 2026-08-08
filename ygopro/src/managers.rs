@@ -369,12 +369,16 @@ pub mod deck_manager {
             Ok(())
         }
 
-        pub fn get_lflist(&self, index: u32) -> Option<&LFList> {
+        pub fn get_lflist_by_index(&self, index: u32) -> Option<&LFList> {
             self.lflists.get(index as usize)
         }
 
-        pub fn get_lflist_name(&self, index: u32) -> &str {
-            self.get_lflist(index)
+        pub fn get_lflist_by_hash(&self, hash: u32) -> Option<&LFList> {
+            self.lflists.iter().find(|l| l.hash == hash)
+        }
+
+        pub fn get_lflist_name(&self, hash: u32) -> &str {
+            self.get_lflist_by_hash(hash)
                 .map(|l| l.name.as_str())
                 .unwrap_or("???")
         }

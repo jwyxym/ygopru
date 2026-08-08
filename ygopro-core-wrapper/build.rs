@@ -20,6 +20,9 @@ fn main() {
 
     let mut build = cc::Build::new();
 
+    // Suppress all C/C++ warnings (GCC/Clang -w, MSVC /w), errors still fail the build
+    build.warnings(false);
+
     // Compile Lua C files
     for entry in glob(lua_dir.join("*.c").to_str().unwrap()).unwrap() {
         let path = entry.unwrap();

@@ -40,10 +40,11 @@ fn parse_args() -> (u16, HostInfo, ReplayMode, Vec<[u32; SEED_COUNT]>) {
     }
 
     let port: u16 = args[1].parse().expect("Cannot parse port number");
+    let deck_manager = ygopro::managers::deck_manager::load();
 
     let hostinfo = HostInfo {
-        lflist: (args[2]).parse().unwrap_or(999),
-        rule: parse_rule(&args[3]),
+        lflist: deck_manager.as_ref().and_then(|dm| dm.get_lflist_by_index(args[2].parse().unwrap_or(0))).map(|l| l.hash).unwrap_or(0),
+        rule: Rule::try_from(args[3].parse::<u8>().unwrap_or(0)).unwrap_or(Rule::All),
         mode: match args[4].parse::<u8>().unwrap_or(0) {
             m if m > 2 => Mode::Single,
             m => Mode::try_from(m).unwrap_or(Mode::Single),
@@ -129,15 +130,4 @@ async fn start_server(port: u16, hostinfo: HostInfo, replay_mode: ReplayMode, pr
     });
 
     handle.await.ok();
-}
-
-fn parse_rule(argument: &str) -> Rule {
-    match argument.parse::<u8>().unwrap_or(5) {
-        0 => Rule::OCG,
-        1 => Rule::TCG,
-        2 => Rule::SC,
-        3 => Rule::Custom,
-        4 => Rule::OCG | Rule::TCG,
-        _ => Rule::empty(),
-    }
 }

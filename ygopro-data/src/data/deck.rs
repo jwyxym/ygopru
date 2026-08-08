@@ -9,6 +9,7 @@ use modular_bitfield::bitfield;
 use num_enum::IntoPrimitive;
 use num_enum::TryFromPrimitive;
 
+use crate::constants::OT;
 use crate::constants::Rule;
 use crate::constants::Type;
 use crate::data::Card;
@@ -54,15 +55,16 @@ impl Deck {
         counts 
     }
 
-    pub fn load<'a>(&mut self, resolve_card: impl Fn(u32) -> Option<&'a Card>) {
+    pub fn load<'a>(&mut self, resolve_card: impl Fn(u32) -> Option<&'a Card>) -> Option<DeckError> {
+        let response = remove_unknown_cards(&mut self.main, |c| resolve_card(c).map(|c| c.card_type))
+            .or(remove_unknown_cards(&mut self.side, |c| resolve_card(c).map(|c| c.card_type)));
         self.separate(|c| resolve_card(c).map(|c| c.card_type).unwrap_or(Type::empty()));
-        self.remove(|c| resolve_card(c).map(|c| c.card_type));
+        response
     }
 
     pub fn prepare<'a>(&mut self, lflist: &LFList, rule: Rule, resolve_card: impl Fn(u32) -> Option<&'a Card>) -> Result<(), DeckError> {
-        self.load(&resolve_card);
         self.check(&lflist.content, rule, 
-            |c| resolve_card(c).map(|c| c.ot).unwrap_or(Rule::empty()), 
+            |c| resolve_card(c).map(|c| c.ot).unwrap_or(OT::empty()), 
             |c| resolve_card(c).map(|c| c.card_type).unwrap_or(Type::empty()),
             |c| resolve_card(c).map(|c| c.duel_code()).unwrap_or(0))
     }
@@ -80,11 +82,7 @@ impl Deck {
         separate_main_and_extra(&mut self.main, &mut self.extra, resolve_type);
     }
 
-    pub fn remove(&mut self, get_type: impl Fn(u32) -> Option<Type>) {
-        remove_misplaced_cards(&mut self.main, get_type);
-    }
-
-    pub fn check(&self, lflist: &HashMap<u32, u8>, rule: Rule, get_rule: impl Fn(u32) -> Rule, get_type: impl Fn(u32) -> Type, resolve_code: impl Fn(u32) -> u32) -> Result<(), DeckError> {
+    pub fn check(&self, lflist: &HashMap<u32, u8>, rule: Rule, get_rule: impl Fn(u32) -> OT, get_type: impl Fn(u32) -> Type, resolve_code: impl Fn(u32) -> u32) -> Result<(), DeckError> {
         check_deck_length(&self.main, &self.extra, &self.side)?;
         check_illegal_cards(&self.main, &self.side, &self.extra, get_type)?;
         let iter = self.main.iter().chain(self.extra.iter()).chain(self.side.iter());
@@ -118,7 +116,7 @@ pub enum DeckErrorType {
     MainCount = 0x6,
     ExtraCount = 0x7,
     SideCount = 0x8,
-    NRuleAvailable = 0x9,
+    NotAvailable = 0x9,
 }
 
 #[bitfield]
@@ -127,8 +125,8 @@ pub enum DeckErrorType {
 #[bw(map = |&x| Self::into_bytes(x))]
 #[repr(u32)]
 pub struct DeckError {
-    error_type: DeckErrorType,
     code: modular_bitfield::specifiers::B28,
+    error_type: DeckErrorType,
 }
 
 impl Display for DeckError {
@@ -159,13 +157,19 @@ pub fn check_deck_length(main: &[u32], extra: &[u32], side: &[u32]) -> Result<()
     Ok(())
 }
 
-pub fn remove_misplaced_cards(main: &mut Vec<u32>, get_type: impl Fn(u32) -> Option<Type>) {
+pub fn remove_unknown_cards(main: &mut Vec<u32>, get_type: impl Fn(u32) -> Option<Type>) -> Option<DeckError> {
+    let mut last_removed_code = None;
     main.retain(|code| {
-        if let Some(_type) = get_type(*code) {
-            return !_type.intersects(EXTRA_TYPE)
-        }
-        return false
+        let _type = get_type(*code);
+        if match _type {
+            Some(_type) => _type.contains(Type::Token),
+            None => true
+        } {
+            last_removed_code = Some(*code);
+            false
+        } else { true }
     });
+    last_removed_code.map(|code| DeckError::new().with_error_type(DeckErrorType::UnknownCard).with_code(code))
 }
 
 pub fn check_illegal_cards(main: &Vec<u32>, side: &Vec<u32>, ex: &Vec<u32>, get_type: impl Fn(u32) -> Type) -> Result<(), DeckError> {
@@ -189,13 +193,12 @@ pub fn check_illegal_cards(main: &Vec<u32>, side: &Vec<u32>, ex: &Vec<u32>, get_
     Ok(())
 }
 
-pub fn check_rule<'a>(codes: impl Iterator<Item = &'a u32>, rule: Rule, get_rule: impl Fn(u32) -> Rule) -> Result<(), DeckError> {
-    if rule.is_empty() { return Ok(()); }
+pub fn check_rule<'a>(codes: impl Iterator<Item = &'a u32>, rule: Rule, get_rule: impl Fn(u32) -> OT) -> Result<(), DeckError> {
     for &code in codes {
-        let card_rule = get_rule(code);
-        if card_rule.contains(rule) { continue; }
-        if rule.contains(Rule::OCG) { return Err(DeckError::new().with_error_type(DeckErrorType::OcgOnly).with_code(code)); }
-        if rule.contains(Rule::TCG) { return Err(DeckError::new().with_error_type(DeckErrorType::TcgOnly).with_code(code)); }
+        let ot = get_rule(code);
+        if let Some(error_type) = rule.check_ot(ot) {
+            return Err(DeckError::new().with_error_type(error_type).with_code(code));
+        }
     }
     Ok(())
 }

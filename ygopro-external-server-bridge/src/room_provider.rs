@@ -45,7 +45,7 @@ impl YgoproBinaryFactory {
         let mut args = vec![
             "0".to_string(),
             host_info.lflist.to_string(),
-            host_info.rule.bits().to_string(),
+            u8::from(host_info.rule).to_string(),
             (host_info.mode as u8).to_string(),
             (host_info.duel_rule as u8).to_string(),
             if host_info.no_check_deck { "T".to_string() } else { "F".to_string() },

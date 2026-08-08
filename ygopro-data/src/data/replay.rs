@@ -214,7 +214,7 @@ impl Replay {
     pub fn host_info(&self) -> HostInfo {
         HostInfo { 
             lflist: 999,
-            rule: Rule::empty(),
+            rule: Rule::OCG,
             mode: self.mode(),
             duel_rule: self.duel_rule(), 
             no_check_deck: true,

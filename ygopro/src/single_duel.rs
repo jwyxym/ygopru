@@ -55,6 +55,7 @@ pub struct DuelPlayer {
     ready: bool,
     deck: Deck,
     hand: Option<Hand>,
+    deck_error: Option<DeckError>,
     time_limit: u16,
     time_compensator: u16,
     time_backed: u16,
@@ -67,6 +68,7 @@ impl From<BaseDuelPlayer> for DuelPlayer {
             ready: false,
             deck: Deck::new(),
             hand: None,
+            deck_error: None,
             time_limit: 0,
             time_compensator: 0,
             time_backed: 0,
@@ -983,8 +985,9 @@ use crate::managers::*;
         let mut deck = update_deck.deck.clone();
         if duel.duel_count == 0 {
             let data_manager = data_manager::load().clone().expect("unintied data manager");
-            deck.load(|code| data_manager.get_card(code));
-            duel.get_player_mut_index(player)?.deck = deck;
+            let player = duel.get_player_mut_index(player)?;
+            player.deck_error = deck.load(|code| data_manager.get_card(code));
+            player.deck = deck;
         } else {
             let data_manager = data_manager::load().clone().expect("unintied data manager");
             let side_check_result = duel.get_player_index(player)?.deck.check_after_replacing_side(&mut deck, |code| data_manager.get_card(code));
@@ -1049,7 +1052,12 @@ use crate::managers::*;
         request.extra = pos;
         if is_creator { duel.host_player = pos; }
  
-        response_messages.push(stoc::JoinGame{ info: duel.host_info.clone() }.into());
+        let deck_manager = deck_manager::load();
+        let mut join_info = duel.host_info.clone();
+        if let Some(lflist) = deck_manager.as_ref().and_then(|dm| dm.get_lflist_by_index(join_info.lflist)) {
+            join_info.lflist = lflist.hash;
+        }
+        response_messages.push(stoc::JoinGame{ info: join_info }.into());
         response_messages.push(stoc::TypeChange{ 
             player: pos,
             host: is_creator
@@ -1343,7 +1351,7 @@ use crate::managers::*;
             return vec![];
         }
         let no_check_deck = duel.host_info.no_check_deck;
-        let lflist_index = duel.host_info.lflist;
+        let lflist_hash = duel.host_info.lflist;
         let rule = duel.host_info.rule;
         let Some(duel_player) = duel.get_player_mut_index(index) else {
             warn!("HsReady requested by non-player");
@@ -1353,27 +1361,27 @@ use crate::managers::*;
             warn!("HsReady requested but player is already ready");
             return vec![];
         }
+        let mut messages = vec![];
         if !no_check_deck {
             let deck_manager = deck_manager::load();
             let data_manager = data_manager::load();
-            let Some(data_manager) = data_manager.as_ref() else { return vec![]; };
-            let lflist = deck_manager.as_ref().and_then(|dm| dm.get_lflist(lflist_index)).cloned().unwrap_or_else(|| ygopro_data::data::LFList::new(String::new(), std::collections::HashMap::new()));
-            if let Err(deck_error) = duel_player.deck.prepare(&lflist, rule, |code| data_manager.get_card(code)) {
-                duel.send(stoc::HsPlayerChange { status: PlayerChange::new()
-                    .with_state(PlayerChangeState::Notready)
-                    .with_player(netplayer)
-                }.into(), SendTarget::Single(netplayer));
-                duel.send(stoc::ErrorMessage { err: ErrorMessage::DeckError(deck_error) }.into(), SendTarget::Single(netplayer));
-                return vec![];
+            let data_manager = data_manager.as_ref().expect("unintied data manager");
+            let lflist = deck_manager.as_ref().and_then(|dm| dm.get_lflist_by_hash(lflist_hash)).cloned().unwrap_or_else(|| ygopro_data::data::LFList::new(String::new(), std::collections::HashMap::new()));
+            if let Some(deck_error) = duel_player.deck_error.take() {
+                messages.push(stoc::ErrorMessage { err: ErrorMessage::DeckError(deck_error) }.into());
+            }
+            if messages.is_empty() && let Err(deck_error) = duel_player.deck.prepare(&lflist, rule, |code| data_manager.get_card(code)) {
+                messages.push(stoc::ErrorMessage { err: ErrorMessage::DeckError(deck_error) }.into());
+            }
+            if !messages.is_empty() {
+                messages.insert(0, stoc::HsPlayerChange { status: PlayerChange::new().with_state(PlayerChangeState::Notready).with_player(netplayer)}.into());
             }
         }
-        duel_player.ready = true;
-        duel.send(stoc::HsPlayerChange {
-            status: PlayerChange::new()
-                .with_state(PlayerChangeState::Ready)
-                .with_player(netplayer)
-        }.into(), SendTarget::All);
-        vec![]
+        if messages.is_empty() {
+            duel_player.ready = true;
+            duel.send(stoc::HsPlayerChange { status: PlayerChange::new().with_state(PlayerChangeState::Ready).with_player(netplayer)}.into(), SendTarget::All);
+        }
+        messages
     }
 
     #[handler(ctos::HsNotReady)]

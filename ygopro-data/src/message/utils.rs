@@ -35,7 +35,7 @@ impl Default for HostInfo {
     fn default() -> Self {
         Self { 
             lflist: 0, 
-            rule: Rule::empty(),
+            rule: Rule::OCG,
             mode: crate::constants::Mode::Single, 
             duel_rule: MasterRule::MasterRule2020,
             no_check_deck: false, 

@@ -13,6 +13,8 @@ use modular_bitfield::error::InvalidBitPattern;
 use modular_bitfield::error::OutOfBounds;
 use modular_bitfield::specifiers::B3;
 
+use crate::data::DeckErrorType;
+
 #[derive(BinRead, BinWrite, Copy, Clone, Eq, PartialEq, TryFromPrimitive, IntoPrimitive, Debug)]
 #[brw(repr=u16)]
 #[repr(u16)]
@@ -667,14 +669,53 @@ impl Hand {
 
 bitflags! {
     #[repr(transparent)]
-    #[derive(BinRead, BinWrite, Clone, Copy, Default, Debug)]
+    #[derive(BinRead, BinWrite, Clone, Copy, Default, Eq, PartialEq, Debug)]
     #[br(map=|x| Self::from_bits_retain(x))]
     #[bw(map=|x: &Self| x.bits())]
-    pub struct Rule: u8 {
+    pub struct OT: u8 {
         const OCG = 1;
         const TCG = 2;
         const Custom = 4;
         const SC = 8;
+    }
+}
+
+#[derive(BinRead, BinWrite, Copy, Clone, Eq, PartialEq, TryFromPrimitive, IntoPrimitive, Debug)]
+#[brw(repr = u8)]
+#[repr(u8)]
+pub enum Rule {
+    OCG = 0,
+    TCG = 1,
+    SC = 2,
+    Custom = 3,
+    OCG_TCG = 4,
+    All = 5,
+}
+
+impl From<Rule> for OT {
+    fn from(rule: Rule) -> Self {
+        match rule {
+            Rule::OCG => OT::OCG,
+            Rule::TCG => OT::TCG,
+            Rule::SC => OT::SC,
+            Rule::Custom => OT::Custom,
+            Rule::OCG_TCG => OT::OCG | OT::TCG,
+            Rule::All => OT::empty(),
+        }
+    }
+}
+
+impl Rule {
+    pub fn check_ot(&self, ot: OT) -> Option<DeckErrorType> {
+        let allowed = OT::from(*self);
+        if ot.contains(allowed) { return None; }
+        if ot.contains(OT::OCG) && allowed != OT::OCG {
+            return Some(DeckErrorType::OcgOnly);
+        }
+        if ot.contains(OT::TCG) && allowed != OT::TCG {
+            return Some(DeckErrorType::TcgOnly);
+        }
+        Some(DeckErrorType::NotAvailable)
     }
 }
 
