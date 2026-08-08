@@ -17,6 +17,16 @@ use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
 use tokio_util::codec::LengthDelimitedCodec;
 
+
+#[cfg(feature = "ygomobile_support")]
+use jni::JNIEnv;
+#[cfg(feature = "ygomobile_support")]
+use jni::objects::JClass;
+#[cfg(feature = "ygomobile_support")]
+use jni::objects::JString;
+#[cfg(feature = "ygomobile_support")]
+use jni::sys::jint;
+
 use ygopro_core_wrapper::{DuelSeed, random::SEED_COUNT};
 use ygopro_data::constants::MasterRule;
 use ygopro_data::constants::Mode;
@@ -26,12 +36,11 @@ use ygopro_data::message::HostInfo;
 use ygopro_data::message::ctos;
 use ygopro_handler::RoomProvider;
 
-use ygopro::{
-    managers,
-    single_duel::{SingleDuelHost, self},
-    ypk,
-    init_core
-};
+use ygopro::managers;
+use ygopro::ypk;
+use ygopro::init_core;
+use ygopro::single_duel;
+use ygopro::single_duel::SingleDuelHost;
 
 const START_ALREADY_RUNNING: i32 = -1;
 const START_BAD_ARGUMENTS: i32 = -2;
@@ -54,7 +63,9 @@ struct ServerArguments {
     replay_mode: ReplayMode,
     seeds: Vec<[u32; SEED_COUNT]>,
     base_path: String,
+    #[cfg_attr(not(feature = "ygopro3_support"), allow(dead_code))]
     i18n: String,
+    #[cfg_attr(not(feature = "ygopro3_support"), allow(dead_code))]
     packs: String,
 }
 
@@ -135,6 +146,23 @@ pub extern "C" fn stop_server() {
         server_control.shutdown_sender.send(()).ok();
         server_control.server_thread.join().ok();
     }
+}
+
+#[cfg(feature = "ygomobile_support")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_garymb_ygomobile_network_YGOServer_startServer(mut environment: JNIEnv, _class: JClass, arguments: JString) -> jint {
+    let argument_text = match environment.get_string(&arguments) {
+        Ok(argument_text) => argument_text.to_string_lossy().to_string(),
+        Err(_) => return START_BAD_ARGUMENTS as jint,
+    };
+    let arguments = split_command_line(&argument_text);
+    start_server_from_arguments(&arguments) as jint
+}
+
+#[cfg(feature = "ygomobile_support")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_garymb_ygomobile_network_YGOServer_stopServer(_environment: JNIEnv, _class: JClass) {
+    stop_server();
 }
 
 async fn run_tcp_server(server_arguments: ServerArguments, mut shutdown_receiver: oneshot::Receiver<()>, start_result_sender: std::sync::mpsc::Sender<Result<u16, i32>>) -> io::Result<()> {
