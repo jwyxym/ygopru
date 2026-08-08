@@ -299,9 +299,10 @@ jobs:
 
             filename=$(basename "$file")
             dirname=$(basename "$dir")
+            extension="${filename##*.}"
 
             if [ "$filename" != "$dirname" ]; then
-              mv "$file" "$dir/$dirname"
+              mv "$file" "$dir/$dirname.$extension"
             fi
           done
           gh release delete ${{ matrix.feature }} --cleanup-tag -y || true
