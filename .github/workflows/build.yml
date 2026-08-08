@@ -131,7 +131,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ygoserver-${{ matrix.feature }}-android-${{ matrix.abi }}
+          name: ygoserver-android-${{ matrix.abi }}(${{ matrix.feature }})
           path: dist/${{ matrix.feature }}/android/${{ matrix.abi }}/${{ matrix.output }}
 
   linux:
@@ -185,7 +185,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ygoserver-${{ matrix.feature }}-linux-${{ matrix.arch }}
+          name: ygoserver-linux-${{ matrix.arch }}(${{ matrix.feature }})
           path: dist/${{ matrix.feature }}/linux-${{ matrix.arch }}/libygoserver.so
 
   windows:
@@ -236,7 +236,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ygoserver-${{ matrix.feature }}-windows-${{ matrix.arch }}
+          name: ygoserver-windows-${{ matrix.arch }}(${{ matrix.feature }})
           path: dist/${{ matrix.feature }}/windows-${{ matrix.arch }}/ygoserver.dll
 
   macos:
@@ -282,7 +282,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ygoserver-${{ matrix.feature }}-macos-universal
+          name: ygoserver-macos-universal(${{ matrix.feature }})
           path: dist/${{ matrix.feature }}/macos-universal/libygoserver.dylib
 
   create-release:
@@ -307,7 +307,7 @@ jobs:
       - name: Create release
         run: |
           cd build
-          find . -type d -name '*${{ matrix.feature }}*' -exec rm -rf {} +
+          find . -maxdepth 1 -type d ! -name '*${{ matrix.feature }}*' ! -name '.' -exec rm -rf {} +
           find . -mindepth 1 -maxdepth 1 -type d | while read -r dir; do
             file=$(find "$dir" -maxdepth 1 -type f | head -n 1)
             [ -n "$file" ] || continue
@@ -323,7 +323,7 @@ jobs:
           gh release create ${{ matrix.feature }} $(find . -type f) \
             --target "$GITHUB_SHA" \
             --title "${{ matrix.feature }}" \
-            --notes "Latest build for ${{ github.ref_name }}" \
+            --notes "Latest build for ${{ matrix.feature }}" \
             --latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
