@@ -3,9 +3,12 @@
 
 use binrw::BinRead;
 use binrw::BinWrite;
+use num_enum::FromPrimitive;
+use num_enum::TryFromPrimitive;
 use ygopro_derive::Message;
 
 use crate::constants;
+use crate::constants::Color;
 use crate::constants::CorePlayer;
 use crate::constants::Netplayer;
 use crate::constants::PlayerChange;
@@ -189,8 +192,61 @@ pub struct TimeLimit {
 #[repr(C)]
 pub struct Chat {
     #[brw(pad_after = 1)]
-    pub player: Netplayer,
+    pub player: ChatSource,
     pub msg: U16String
+}
+
+#[derive(BinRead, BinWrite, Copy, Clone, Eq, PartialEq, Debug)]
+#[br(try_map = |raw: u8| ChatSource::try_from(raw))]
+#[bw(map = |value: &ChatSource| u8::from(*value))]
+pub enum ChatSource {
+    Player(Netplayer),
+    System(Color)
+}
+
+impl From<Color> for ChatSource {
+    fn from(color: Color) -> Self {
+        ChatSource::System(color)
+    }
+}
+
+impl From<Netplayer> for ChatSource {
+    fn from(player: Netplayer) -> Self {
+        ChatSource::Player(player)
+    }
+}
+
+impl TryFrom<ChatSource> for Netplayer {
+    type Error = ();
+
+    fn try_from(value: ChatSource) -> Result<Self, Self::Error> {
+        match value {
+            ChatSource::Player(player) => Ok(player),
+            _ => Err(())
+        }
+    }
+}
+
+impl TryFrom<u8> for ChatSource {
+    type Error = binrw::Error;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value <= 7 {
+            Ok(ChatSource::Player(Netplayer::from_primitive(value)))
+        } else {
+            Color::try_from_primitive(value)
+                .map(ChatSource::System)
+                .map_err(|_| binrw::Error::NoVariantMatch { pos: 0 })
+        }
+    }
+}
+
+impl From<ChatSource> for u8 {
+    fn from(value: ChatSource) -> u8 {
+        match value {
+            ChatSource::Player(player) => player.into(),
+            ChatSource::System(color) => color.into(),
+        }
+    }
 }
 
 #[derive(BinRead, BinWrite, Debug, Clone, Message)]

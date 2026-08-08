@@ -566,7 +566,7 @@ pub enum DuelStage {
 #[derive(BinRead, BinWrite, Copy, Clone, Eq, PartialEq, TryFromPrimitive, IntoPrimitive, Debug)]
 #[brw(repr=u8)]
 #[repr(u8)]
-pub enum Colors {
+pub enum Color {
     Observer = 7,
     Lightblue = 8,
     Red = 11,
@@ -578,12 +578,6 @@ pub enum Colors {
     White = 17,
     Gray = 18,
     Darkgray = 19,
-}
-
-impl std::default::Default for Colors {
-    fn default() -> Self {
-        return Colors::Observer;
-    }
 }
 
 #[derive(BinRead, BinWrite, Copy, Clone, Eq, PartialEq, TryFromPrimitive, IntoPrimitive, Debug)]
