@@ -28,8 +28,8 @@ pub mod data_manager {
     pub fn init() {
         let mut data_manager = DataManager::new();
         #[cfg(all(
-            not(feature = "server_ygopro3_support"),
-            not(feature = "server_ygomobile_support"),
+            not(feature = "ygopro3_support"),
+            not(feature = "ygomobile_support"),
         ))] {
             let db_path = super::config_manager::load()
                 .as_ref()
@@ -56,8 +56,8 @@ pub mod data_manager {
         }
 
         #[cfg(any(
-            feature = "server_ygopro3_support",
-            feature = "server_ygomobile_support",
+            feature = "ygopro3_support",
+            feature = "ygomobile_support",
         ))] {
             use walkdir::WalkDir;
             let path: String = super::config_manager::load()
@@ -67,7 +67,7 @@ pub mod data_manager {
                 .to_string();
             let path: &Path = Path::new(&path);
             let db_path: PathBuf = (|| -> PathBuf {
-                #[cfg(feature = "server_ygopro3_support")] {
+                #[cfg(feature = "ygopro3_support")] {
                     let i18n: String = super::config_manager::load()
                         .as_ref()
                         .and_then(|config_manager| config_manager.get("i18n"))
@@ -75,7 +75,7 @@ pub mod data_manager {
                         .to_string();
                     return path.join("cdb").join(format!("cards-{}.cdb", i18n));
                 }
-                #[cfg(feature = "server_ygomobile_support")]
+                #[cfg(feature = "ygomobile_support")]
                 return path.join("cards.cdb");
             })();
             let expansions_path: PathBuf = path.join("expansions");
@@ -352,8 +352,8 @@ pub mod deck_manager {
     pub fn init() {
         let mut deck_manager: DeckManager = DeckManager::new();
         #[cfg(all(
-            not(feature = "server_ygopro3_support"),
-            not(feature = "server_ygomobile_support"),
+            not(feature = "ygopro3_support"),
+            not(feature = "ygomobile_support"),
         ))] {
             let lflist_path = super::config_manager::load()
                 .as_ref()
@@ -377,8 +377,8 @@ pub mod deck_manager {
         }
 
         #[cfg(any(
-            feature = "server_ygopro3_support",
-            feature = "server_ygomobile_support",
+            feature = "ygopro3_support",
+            feature = "ygomobile_support",
         ))] {
             use std::path::Path;
             use std::path::PathBuf;

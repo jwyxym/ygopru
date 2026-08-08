@@ -321,7 +321,7 @@ fn init(server_arguments: &ServerArguments) {
 fn configure_resource_paths(server_arguments: &ServerArguments) {
     let mut entries: HashMap<String, String> = HashMap::new();
     entries.insert("path".to_string(), server_arguments.base_path.clone());
-    #[cfg(feature = "server_ygopro3_support")] {
+    #[cfg(feature = "ygopro3_support")] {
         entries.insert("i18n".to_string(), server_arguments.i18n.clone());
         entries.insert("pack_names".to_string(), server_arguments.packs.clone());
     }

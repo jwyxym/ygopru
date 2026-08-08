@@ -31,5 +31,5 @@ ygopro-derive = { path = "../ygopro-derive" }
 [features]
 default = ["zip"]
 zip = ["dep:zip"]
-server_ygopro3_support = []
-server_ygomobile_support = []
+ygopro3_support = []
+ygomobile_support = []

@@ -18,8 +18,8 @@ pub mod archive_manager {
     pub fn init() {
         let mut expansion_archives: Vec<ExpansionArchive> = Vec::new();
         #[cfg(all(
-            not(feature = "server_ygopro3_support"),
-            not(feature = "server_ygomobile_support"),
+            not(feature = "ygopro3_support"),
+            not(feature = "ygomobile_support"),
         ))] {
             let entries = if let Ok(entries) = fs::read_dir("./expansions") {
                 entries 
@@ -48,8 +48,8 @@ pub mod archive_manager {
         }
 
         #[cfg(any(
-            feature = "server_ygopro3_support",
-            feature = "server_ygomobile_support",
+            feature = "ygopro3_support",
+            feature = "ygomobile_support",
         ))] {
             let path: String = crate::managers::config_manager::load()
                 .as_ref()
@@ -59,7 +59,7 @@ pub mod archive_manager {
             let path: &Path = Path::new(&path);
             let expansions_path: PathBuf = path.join("expansions");
 
-            #[cfg(feature = "server_ygopro3_support")] {
+            #[cfg(feature = "ygopro3_support")] {
                 let pack_names: Vec<String> = crate::managers::config_manager::load()
                     .as_ref()
                     .and_then(|config_manager| config_manager.get("pack_names"))
@@ -87,7 +87,7 @@ pub mod archive_manager {
                 }
             }
 
-            #[cfg(feature = "server_ygomobile_support")] {
+            #[cfg(feature = "ygomobile_support")] {
                 use walkdir::WalkDir;
                 WalkDir::new(expansions_path)
                     .max_depth(1)
@@ -115,7 +115,7 @@ pub mod archive_manager {
         GLOBAL_ARCHIVES.store(Some(Arc::new(expansion_archives)));
     }
 
-    #[cfg(not(feature = "server_ygopro3_support"))]
+    #[cfg(not(feature = "ygopro3_support"))]
     fn is_expansion_archive(path: &Path) -> bool {
         path.extension()
             .and_then(|extension| extension.to_str())

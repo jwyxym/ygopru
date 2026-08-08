@@ -14,7 +14,7 @@ jobs:
       matrix:
         include:
           - abi: arm64-v8a
-            feature: server_ygopro3_support
+            feature: ygopro3_support
             target: aarch64-linux-android
             linker: aarch64-linux-android21-clang
             cc: aarch64-linux-android21-clang
@@ -22,7 +22,7 @@ jobs:
             ar: llvm-ar
             output: libygoserver.so
           - abi: arm64-v8a
-            feature: server_ygomobile_support
+            feature: ygomobile_support
             target: aarch64-linux-android
             linker: aarch64-linux-android21-clang
             cc: aarch64-linux-android21-clang
@@ -30,7 +30,7 @@ jobs:
             ar: llvm-ar
             output: libygoserver.so
           - abi: armeabi-v7a
-            feature: server_ygopro3_support
+            feature: ygopro3_support
             target: armv7-linux-androideabi
             linker: armv7a-linux-androideabi21-clang
             cc: armv7a-linux-androideabi21-clang
@@ -38,7 +38,7 @@ jobs:
             ar: llvm-ar
             output: libygoserver.so
           - abi: armeabi-v7a
-            feature: server_ygomobile_support
+            feature: ygomobile_support
             target: armv7-linux-androideabi
             linker: armv7a-linux-androideabi21-clang
             cc: armv7a-linux-androideabi21-clang
@@ -46,7 +46,7 @@ jobs:
             ar: llvm-ar
             output: libygoserver.so
           - abi: x86
-            feature: server_ygopro3_support
+            feature: ygopro3_support
             target: i686-linux-android
             linker: i686-linux-android21-clang
             cc: i686-linux-android21-clang
@@ -54,7 +54,7 @@ jobs:
             ar: llvm-ar
             output: libygoserver.so
           - abi: x86
-            feature: server_ygomobile_support
+            feature: ygomobile_support
             target: i686-linux-android
             linker: i686-linux-android21-clang
             cc: i686-linux-android21-clang
@@ -62,7 +62,7 @@ jobs:
             ar: llvm-ar
             output: libygoserver.so
           - abi: x86_64
-            feature: server_ygopro3_support
+            feature: ygopro3_support
             target: x86_64-linux-android
             linker: x86_64-linux-android21-clang
             cc: x86_64-linux-android21-clang
@@ -70,7 +70,7 @@ jobs:
             ar: llvm-ar
             output: libygoserver.so
           - abi: x86_64
-            feature: server_ygomobile_support
+            feature: ygomobile_support
             target: x86_64-linux-android
             linker: x86_64-linux-android21-clang
             cc: x86_64-linux-android21-clang
@@ -142,19 +142,19 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            feature: server_ygopro3_support
+            feature: ygopro3_support
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - arch: x86_64
-            feature: server_ygomobile_support
+            feature: ygomobile_support
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - arch: arm64
-            feature: server_ygopro3_support
+            feature: ygopro3_support
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
           - arch: arm64
-            feature: server_ygomobile_support
+            feature: ygomobile_support
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
     steps:
@@ -196,16 +196,16 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            feature: server_ygopro3_support
+            feature: ygopro3_support
             target: x86_64-pc-windows-msvc
           - arch: x86_64
-            feature: server_ygomobile_support
+            feature: ygomobile_support
             target: x86_64-pc-windows-msvc
           - arch: arm64
-            feature: server_ygopro3_support
+            feature: ygopro3_support
             target: aarch64-pc-windows-msvc
           - arch: arm64
-            feature: server_ygomobile_support
+            feature: ygomobile_support
             target: aarch64-pc-windows-msvc
     steps:
       - name: Checkout
@@ -246,8 +246,8 @@ jobs:
       fail-fast: false
       matrix:
         feature:
-          - server_ygopro3_support
-          - server_ygomobile_support
+          - ygopro3_support
+          - ygomobile_support
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -284,3 +284,46 @@ jobs:
         with:
           name: ygoserver-${{ matrix.feature }}-macos-universal
           path: dist/${{ matrix.feature }}/macos-universal/libygoserver.dylib
+
+  create-release:
+    needs: [android, windows, macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - feature: ygopro3
+          - feature: ygomobile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: build
+
+      - name: Create release
+        run: |
+          cd build
+          rm -r "*${{ matrix.feature }}*"
+          find . -mindepth 1 -maxdepth 1 -type d | while read -r dir; do
+            file=$(find "$dir" -maxdepth 1 -type f | head -n 1)
+            [ -n "$file" ] || continue
+
+            filename=$(basename "$file")
+            dirname=$(basename "$dir")
+
+            if [ "$filename" != "$dirname" ]; then
+              mv "$file" "$dir/$dirname"
+            fi
+          done
+          gh release delete ${{ matrix.feature }} --cleanup-tag -y || true
+          gh release create ${{ matrix.feature }} $(find . -type f) \
+            --target "$GITHUB_SHA" \
+            --title "${{ matrix.feature }}" \
+            --notes "Latest build for ${{ github.ref_name }}" \
+            --latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
