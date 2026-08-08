@@ -47,10 +47,7 @@ pub mod archive_manager {
             }
         }
 
-        #[cfg(any(
-            feature = "ygopro3_support",
-            feature = "ygomobile_support",
-        ))] {
+        #[cfg(feature = "ygopro3_support")] {
             let path: String = crate::managers::config_manager::load()
                 .as_ref()
                 .and_then(|config_manager| config_manager.get("path"))
@@ -58,58 +55,74 @@ pub mod archive_manager {
                 .to_string();
             let path: &Path = Path::new(&path);
             let expansions_path: PathBuf = path.join("expansions");
-
-            #[cfg(feature = "ygopro3_support")] {
-                let pack_names: Vec<String> = crate::managers::config_manager::load()
-                    .as_ref()
-                    .and_then(|config_manager| config_manager.get("pack_names"))
-                    .map(|pack_names| {
-                        pack_names
-                            .split('/')
-                            .map(|pack_name| pack_name.trim().to_string())
-                            .filter(|pack_name| !pack_name.is_empty())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                for pack_name in &pack_names {
-                    let pack_path: PathBuf = expansions_path.join(pack_name);
-                    let Ok(file) = fs::File::open(&pack_path) else {
-                        log::debug!("Failed to open archive {}", pack_name);
-                        continue;
-                    };
-                    match ZipArchive::new(file) {
-                        Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
-                            _path: pack_path,
-                            archive_reader: Mutex::new(archive_reader),
-                        }),
-                        Err(error) => log::debug!("Failed to open archive {}: {}", pack_name, error),
-                    }
+            let pack_names: Vec<String> = crate::managers::config_manager::load()
+                .as_ref()
+                .and_then(|config_manager| config_manager.get("pack_names"))
+                .map(|pack_names| {
+                    pack_names
+                        .split('/')
+                        .map(|pack_name| pack_name.trim().to_string())
+                        .filter(|pack_name| !pack_name.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            for pack_name in &pack_names {
+                let pack_path: PathBuf = expansions_path.join(pack_name);
+                let Ok(file) = fs::File::open(&pack_path) else {
+                    log::debug!("Failed to open archive {}", pack_name);
+                    continue;
+                };
+                match ZipArchive::new(file) {
+                    Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
+                        _path: pack_path,
+                        archive_reader: Mutex::new(archive_reader),
+                    }),
+                    Err(error) => log::debug!("Failed to open archive {}: {}", pack_name, error),
                 }
             }
+        }
 
-            #[cfg(feature = "ygomobile_support")] {
-                use walkdir::WalkDir;
-                WalkDir::new(expansions_path)
-                    .max_depth(1)
-                    .into_iter()
-                    .for_each(|i| {
-                        if let Ok(i) = i {
-                            let path: PathBuf = i.into_path();
-                            if is_expansion_archive(&path) {
-                                if let Ok(file) = fs::File::open(&path) {
-                                    match ZipArchive::new(file) {
-                                        Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
-                                            _path: path,
-                                            archive_reader: Mutex::new(archive_reader),
-                                        }),
-                                        Err(error) => log::debug!("Failed to open archive {}: {}", path.display(), error),
-                                    }
-                                } else {
-                                    log::debug!("Failed to open archive {}", path.display());
-                                };
-                            }
+        #[cfg(feature = "ygomobile_support")] {
+            use walkdir::WalkDir;
+            let path: String = crate::managers::config_manager::load()
+                .as_ref()
+                .and_then(|config_manager| config_manager.get("path"))
+                .unwrap_or("./")
+                .to_string();
+            let path: &Path = Path::new(&path);
+            let expansions_path: PathBuf = path.join("expansions");
+            WalkDir::new(expansions_path)
+                .max_depth(1)
+                .into_iter()
+                .for_each(|i| {
+                    if let Ok(i) = i {
+                        let path: PathBuf = i.into_path();
+                        if is_expansion_archive(&path) {
+                            if let Ok(file) = fs::File::open(&path) {
+                                match ZipArchive::new(file) {
+                                    Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
+                                        _path: path,
+                                        archive_reader: Mutex::new(archive_reader),
+                                    }),
+                                    Err(error) => log::debug!("Failed to open archive {}: {}", path.display(), error),
+                                }
+                            } else {
+                                log::debug!("Failed to open archive {}", path.display());
+                            };
                         }
-                    });
+                    }
+                });
+            let path = path.join("scripts.zip");
+            if let Ok(file) = fs::File::open(&path) {
+                match ZipArchive::new(file) {
+                    Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
+                        _path: path,
+                        archive_reader: Mutex::new(archive_reader),
+                    }),
+                    Err(error) => log::debug!("Failed to open archive {}: {}", path.display(), error),
+                }
+            } else {
+                log::debug!("Failed to open archive {}", path.display());
             }
         }
         GLOBAL_ARCHIVES.store(Some(Arc::new(expansion_archives)));

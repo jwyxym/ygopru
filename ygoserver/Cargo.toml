@@ -30,5 +30,5 @@ hashbrown = "0.17.1"
 parking_lot = { version = "0", features = ["arc_lock", "send_guard"] }
 
 [features]
-ygopro3_support = ["ygopro/ygopro3_support"]
-ygomobile_support = ["ygopro/ygomobile_support"]
+ygopro3_support = ["ygopro/ygopro3_support", "ygopro/zip"]
+ygomobile_support = ["ygopro/ygomobile_support", "ygopro/zip"]

@@ -1,7 +1,9 @@
-/target
+target
 .history
 .vscode
 *.cdb
 *.conf
 script
 TODO*
+expansions
+scripts.zip
