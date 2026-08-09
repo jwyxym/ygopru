@@ -1326,8 +1326,14 @@ mod ygopro_handlers {
     #[handler(ctos::Chat)]
     #[register_to(YGOPRO_HANDLERS)]
     fn on_chat(duel: &mut SingleDuel, player: Netplayer, chat: &ctos::Chat) {
+        // Chat is a protocol which is not related to ygocore, so netplayer should work fine here. But  
+        // sadly, all ygopro clients will swap message according to the player is first attack or not.
+        // So, we must do a reverse here.
         let chat = stoc::Chat {
-            player: player.into(),
+            player: match player {
+                Netplayer::Player(_) => duel.to_net_player(CorePlayer::from(player)).into(),
+                _ => player,
+            }.into(),
             msg: chat.msg.clone()
         };
         duel.send(chat.into(), SendTarget::All);
@@ -1655,7 +1661,11 @@ mod ygocore_handlers {
             // we should use engine_flag is Flags::Waiting to check if need continue.
             // but sadly, ygocore will incorrectly send waiting even need to continue.
             // so just like original ygopro do, we check specific message here.
-            if messages.last().map_or(false, |m| m.waiting_for().is_some() || matches!(m, gm::Message::Retry(_))) { break; }
+            // and also, win is not last message of core. it will repeatedly send win.
+            // though the full duel ends, but we still need to break it so that we wouldn't
+            // repeatly count the winner.
+            if messages.last().map_or(false, |m| m.waiting_for().is_some() || 
+                        matches!(gm::MessageType::from(m), gm::MessageType::Retry | gm::MessageType::Win)) { break; }
         }
         messages
     }
