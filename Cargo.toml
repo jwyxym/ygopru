@@ -1,4 +1,18 @@
+[package]
+name = "ygopru"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ygopro = { path = "./ygopro" }
+ygopro-data = { path = "./ygopro-data" }
+ygopro-handler = { path = "./ygopro-handler" }
+ygopro-core-wrapper = { path = "./ygopro-core-wrapper" }
+ygopro-derive = { path = "./ygopro-derive" }
+ygopro-external-server-bridge = { path = "./ygopro-external-server-bridge" }
+
 [workspace]
+default-members = ["ygopro"]
 resolver = "2"
 members = [
     "ygopro-data",

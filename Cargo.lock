@@ -1953,6 +1953,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ygopru"
+version = "0.1.0"
+dependencies = [
+ "ygopro",
+ "ygopro-core-wrapper",
+ "ygopro-data",
+ "ygopro-derive",
+ "ygopro-external-server-bridge",
+ "ygopro-handler",
+]
+
+[[package]]
 name = "ygoserver"
 version = "0.1.0"
 dependencies = [
