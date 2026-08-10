@@ -23,7 +23,7 @@ glob = "0.3"
 
 zip = { version = "4", optional = true }
 
-ygopro-data = { path = "../ygopro-data" }
+ygopro-data = { path = "../ygopro-data", default-features = false }
 ygopro-core-wrapper = { path = "../ygopro-core-wrapper" }
 ygopro-handler = { path = "../ygopro-handler" }
 ygopro-derive = { path = "../ygopro-derive" }
@@ -32,5 +32,11 @@ anymap3 = "1.1.0"
 [features]
 default = ["zip"]
 zip = ["dep:zip"]
+card = ["ygopro-data/card"]
 ygopro3_support = []
 ygomobile_support = []
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 'z'
