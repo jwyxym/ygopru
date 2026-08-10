@@ -4,12 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ygopro = { path = "./ygopro" }
-ygopro-data = { path = "./ygopro-data" }
+ygopro = { path = "./ygopro", optional = true }
+ygopro-data = { path = "./ygopro-data", optional = true }
 ygopro-handler = { path = "./ygopro-handler" }
 ygopro-core-wrapper = { path = "./ygopro-core-wrapper" }
 ygopro-derive = { path = "./ygopro-derive" }
 ygopro-external-server-bridge = { path = "./ygopro-external-server-bridge" }
+
+[features]
+default = [
+    "zip",
+    "card"
+]
+zip = ["ygopro/zip"]
+card = ["ygopro-data/card"]
 
 [workspace]
 default-members = ["ygopro"]
