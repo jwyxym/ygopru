@@ -5,11 +5,14 @@ edition = "2024"
 
 [dependencies]
 ygopro = { path = "./ygopro", default-features = false }
-ygopro-data = { path = "./ygopro-data", default-features = false }
-ygopro-handler = { path = "./ygopro-handler" }
-ygopro-core-wrapper = { path = "./ygopro-core-wrapper" }
+ygopro-data.workspace = true
+ygopro-handler = { path = "./ygopro-handler", default-features = false }
+ygopro-core-wrapper = { path = "./ygopro-core-wrapper", default-features = false }
 ygopro-derive = { path = "./ygopro-derive" }
-ygopro-external-server-bridge = { path = "./ygopro-external-server-bridge" }
+ygopro-external-server-bridge = { path = "./ygopro-external-server-bridge", default-features = false }
+
+[workspace.dependencies]
+ygopro-data = { path = "./ygopro-data", default-features = false }
 
 [features]
 default = [
@@ -17,7 +20,13 @@ default = [
     "card"
 ]
 zip = ["ygopro/zip"]
-card = ["ygopro/card", "ygopro-data/card"]
+card = [
+    "ygopro/card",
+    "ygopro-core-wrapper/card",
+    "ygopro-data/card",
+    "ygopro-external-server-bridge/card",
+    "ygopro-handler/card",
+]
 
 [workspace]
 default-members = ["ygoserver"]

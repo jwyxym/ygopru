@@ -17,6 +17,14 @@ bytes = "1"
 base64 = "0.22"
 log = "0.4"
 
-ygopro-core-wrapper = { path = "../ygopro-core-wrapper" }
-ygopro-data = { path = "../ygopro-data" }
-ygopro-handler = { path = "../ygopro-handler" }
+ygopro-core-wrapper = { path = "../ygopro-core-wrapper", default-features = false }
+ygopro-data.workspace = true
+ygopro-handler = { path = "../ygopro-handler", default-features = false }
+
+[features]
+default = []
+card = [
+    "ygopro-core-wrapper/card",
+    "ygopro-data/card",
+    "ygopro-handler/card",
+]

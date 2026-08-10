@@ -21,8 +21,19 @@ log = "0.4"
 pretty_env_logger = "0.5"
 thiserror = "1"
 
-ygopro-data = { path = "../ygopro-data" }
-ygopro = { path = "../ygopro" }
-ygopro-core-wrapper = { path = "../ygopro-core-wrapper" }
-ygopro-handler = { path = "../ygopro-handler" }
-ygopro-external-server-bridge = { path = "../ygopro-external-server-bridge" }
+ygopro-data.workspace = true
+ygopro = { path = "../ygopro", default-features = false }
+ygopro-core-wrapper = { path = "../ygopro-core-wrapper", default-features = false }
+ygopro-handler = { path = "../ygopro-handler", default-features = false }
+ygopro-external-server-bridge = { path = "../ygopro-external-server-bridge", default-features = false }
+
+[features]
+default = ["card", "zip"]
+card = [
+    "ygopro/card",
+    "ygopro-core-wrapper/card",
+    "ygopro-data/card",
+    "ygopro-external-server-bridge/card",
+    "ygopro-handler/card",
+]
+zip = ["ygopro/zip"]
