@@ -20,7 +20,7 @@ zip = ["ygopro/zip"]
 card = ["ygopro-data/card"]
 
 [workspace]
-default-members = ["ygopro"]
+default-members = ["ygoserver"]
 resolver = "2"
 members = [
     "ygopro-data",
