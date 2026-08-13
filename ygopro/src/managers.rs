@@ -127,7 +127,7 @@ pub mod data_manager {
 
     pub struct DataManager {
         pub cards: HashMap<u32, Card>,
-        extra_setcode: HashMap<u32, Vec<u16>>,
+        pub extra_setcode: HashMap<u32, Vec<u16>>,
     }
 
     impl DataManager {
