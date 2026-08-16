@@ -1,46 +1,3 @@
-//! Message extraction and response construction.
-//!
-//! # `FromRequest` implementations
-//!
-//! | Req | Extracts | Where |
-//! |-----|----------|-------|
-//! | `Request<Message, Extra>` | `Extra` | `Extra: SocketAddr` |
-//! | `Request<Message, Extra>` | `Extra` | `Extra: Netplayer` |
-//! | `Request<Message, Extra>` | `Extra` | `Extra: CorePlayer` |
-//! | `Request<Message, Extra>` | `&Message` | `Message: Send, Extra: Send` |
-//! | `Request<ctos::Message, Extra>` | `&ctos::$variant` | generated per variant |
-//! | `ctos::Message` | `&ctos::$variant` | generated per variant |
-//! | `Request<stoc::Message, Extra>` | `&stoc::$variant` | generated per variant |
-//! | `stoc::Message` | `&stoc::$variant` | generated per variant |
-//! | `Request<Complex<ctos::Message>, Extra>` | `&ctos::$variant` | generated per variant |
-//! | `Complex<ctos::Message>` | `&ctos::$variant` | generated per variant |
-//! | `Request<Complex<stoc::Message>, Extra>` | `&stoc::$variant` | generated per variant |
-//! | `Complex<stoc::Message>` | `&stoc::$variant` | generated per variant |
-//! | `Request<gm::Message, Extra>` | `&gm::$variant` | generated per variant |
-//! | `gm::Message` | `&gm::$variant` | generated per variant |
-//! | `Request<Complex<gm::Message>, Extra>` | `&gm::$variant` | generated per variant |
-//! | `Complex<gm::Message>` | `&gm::$variant` | generated per variant |
-//!
-//! # `IntoResponse` implementations
-//!
-//! | Type | Response |
-//! |------|----------|
-//! | `()` | `Continue` |
-//! | `Infallible` | `Continue` |
-//! | `Vec<Message>` | `ReplaceMultiple` |
-//! | `bool` | `Stop` if true, `Continue` if false |
-//! | `&'static str` | `"stop"` → Stop, `"kick"` → Kick, `"cancel"` → Swallow |
-//! | `ctos::Message` | `Replace` with self |
-//! | `stoc::Message` | `Replace` with self |
-//! | `gm::Message` | `Replace` with self |
-//! | `ctos::$variant` / `stoc::$variant` / `gm::$variant` | `Replace` with wrapped `Message::$variant` |
-//!
-//! # `MessageKey` implementations
-//!
-//! | Type | Key |
-//! |------|-----|
-//! | `Request<Message, Extra>` | delegates to `Message::message_key()` |
-
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
@@ -190,10 +147,44 @@ pub enum Response<Message> {
     ReplaceMultiple(Vec<Message>),
     /// This message will not send to its target.
     Swallow,
-    /// This message will not send to its target, and stop processing further handlers.
-    Stop,
+    /// This message will not send to its target, and stop current room.
+    Terminate,
     /// This message will not send to its target, and kick its source.
     Kick,
+}
+
+impl<Req, State, Message> FromRequest<Req, State, Response<Message>> for &mut Response<Message> where Req: Send, State: Send, Message: Send + Sync {
+    fn from_request(bundle: &mut Bundle<Req, State, Response<Message>>) -> Option<Self> {
+        Some(unsafe { &mut *(&mut bundle.response as *mut Response<Message>) })
+    }
+}
+
+impl<Message> std::ops::Mul for Response<Message> {
+    type Output = Response<Message>;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Response::Continue, other) | (other, Response::Continue) => other,
+            (Response::Kick, _) | (_, Response::Kick) => Response::Kick,
+            (Response::Terminate, _) | (_, Response::Terminate) => Response::Terminate,
+            (Response::Swallow, _) | (_, Response::Swallow) => Response::Swallow,
+            (Response::Replace(lhs_message), Response::Replace(rhs_message)) => {
+                Response::ReplaceMultiple(vec![lhs_message, rhs_message])
+            }
+            (Response::Replace(message), Response::ReplaceMultiple(mut messages)) => {
+                messages.insert(0, message);
+                Response::ReplaceMultiple(messages)
+            }
+            (Response::ReplaceMultiple(mut messages), Response::Replace(message)) => {
+                messages.push(message);
+                Response::ReplaceMultiple(messages)
+            }
+            (Response::ReplaceMultiple(mut lhs_messages), Response::ReplaceMultiple(mut rhs_messages)) => {
+                lhs_messages.append(&mut rhs_messages);
+                Response::ReplaceMultiple(lhs_messages)
+            }
+        }
+    }
 }
 
 impl<Message> Default for Response<Message> {
@@ -250,7 +241,7 @@ impl<Message> IntoResponse<Response<Message>> for Vec<Message> {
 
 impl<Message> IntoResponse<Response<Message>> for bool {
     fn into_response(self) -> Response<Message> {
-        if self { Response::Stop } else { Response::Continue }
+        if self { Response::Terminate } else { Response::Continue }
     }
 }
 
@@ -258,7 +249,7 @@ impl<Message> IntoResponse<Response<Message>> for &'static str {
     fn into_response(self) -> Response<Message> {
         match self {
             "continue" => Response::Continue,
-            "stop" => Response::Stop,
+            "terminate" => Response::Terminate,
             "kick" => Response::Kick,
             "cancel" | "_cancel" => Response::Swallow,
             _ => Response::Continue,
@@ -285,6 +276,21 @@ where Response1: IntoResponse<Response<Message>>, Response2: IntoResponse<Respon
     }
 }
 
+impl<Req, State, Res> FromRequest<Req, State, Res> for &mut crate::StopFlag
+where Req: Send, State: Send, Res: Send {
+    fn from_request(bundle: &mut Bundle<Req, State, Res>) -> Option<Self> {
+        Some(unsafe { &mut *(&mut bundle.stop_flag as *mut crate::StopFlag) })
+    }
+}
+
 ygopro_data::every_client_to_server_flat_message!(impl_ctos);
 ygopro_data::every_server_to_client_flat_message!(impl_stoc);
 ygopro_data::every_game_message_flat_message!(impl_gm);
+
+pub trait ContainsMap {
+    fn get_map(&self) -> &anymap3::Map<dyn anymap3::CloneAny + Send>;
+}
+
+pub trait ContainsMapMut {
+    fn get_map(&mut self) -> &mut anymap3::Map<dyn std::any::Any + Send>;
+}

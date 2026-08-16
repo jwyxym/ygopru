@@ -21,6 +21,7 @@ use tokio_util::codec::LengthDelimitedCodec;
 
 use ygopro::managers::DataManager;
 use ygopro::managers::data_manager;
+use ygopro_core_wrapper::DuelSeed;
 use ygopro_data::complex::Complex;
 use ygopro_data::constants::Netplayer;
 use ygopro_data::data::Replay;
@@ -110,12 +111,10 @@ pub async fn validate_replay(path: &Path, wait: Option<u16>, timeout_seconds: u6
         _ => {
             let mut host_info = replay.host_info();
             host_info.time_limit = 0;
-            let configuration = ygopro::Configuration {
-                no_mask: true,
-                no_init_shuffle_deck: true,
-                seed_generator: Some(Box::new(move |_duel_count: u8| ygopro_core_wrapper::DuelSeed::Complicated(replay.header.seed_sequence))),
-                ..Default::default()
-            };
+            let seed_sequence = replay.header.seed_sequence;
+            let mut configuration = ygopro::Configuration::default();
+            configuration.enable_plugin(ygopro::plugin::no_init_shuffle_deck::NAME);
+            configuration.seed_generator = Some(Box::new(move |_duel_count: u8| DuelSeed::Complicated(seed_sequence)));
             let (mut host, _duel_task) = ygopro::SingleDuel::new(host_info, configuration);
             validate_with_room(&mut host, replay,  wait, validation_timeout).await
         }

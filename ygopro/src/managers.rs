@@ -213,7 +213,6 @@ pub mod data_manager {
         }
     }
 
-    /// Corresponds to `CardReader` in data_manager.cpp:510-514.
     pub extern "C" fn card_reader(code: u32, data: *mut CoreCard) -> u32 {
         if data.is_null() {
             return 0;
@@ -547,29 +546,6 @@ pub mod config_manager {
                 .map(|s| s.as_str())
                 .unwrap_or(default)
         }
-    }
-
-    pub fn get_duel_configuration() -> crate::Configuration {
-        let mut configuration: crate::Configuration = Default::default();
-        let guard = load();
-        let cm = guard.as_ref().expect("config manager not inited");
-        let get_value = |key: &str| -> Option<String> {
-            cm.get(key).map(|value| value.to_string())
-        };
-        configuration.no_mask = get_value("no_mask").is_some();
-        configuration.no_init_shuffle_deck = get_value("no_init_shuffle_deck").is_some();
-        configuration.allow_join_after_start = get_value("allow_join_after_start").is_some();
-        configuration.terminate_when_retry = get_value("terminate_when_retry").is_some();
-        configuration.override_best_of = get_value("override_best_of").and_then(|value| value.parse().ok()).unwrap_or(0);
-        configuration.preloaded_scripts = get_value("preloaded_scripts")
-            .as_ref()
-            .map(|value| split_paths(value).into_iter().map(|script| script.to_string()).collect())
-            .unwrap_or_else(|| crate::common::Configuration::default().preloaded_scripts);
-        configuration.add_time_after_operation = get_value("add_time_after_operation").and_then(|value| value.parse().ok()).unwrap_or(1);
-        configuration.max_add_time_each_turn = get_value("max_add_time_each_turn").and_then(|value| value.parse().ok()).unwrap_or(0);
-        configuration.ignore_small_time_under_this_duration = get_value("ignore_small_time_under_this_duration").and_then(|value| value.parse().ok()).unwrap_or(10);
-        configuration.add_small_time_deposit_after_operation = get_value("add_small_time_deposit_after_operation").and_then(|value| value.parse().ok()).unwrap_or(1);
-        configuration
     }
 }
 

@@ -43,6 +43,9 @@ pub struct InfoLocation {
 
 impl InfoLocation {
     pub fn should_mask(&self) -> bool {
+        if self.position.intersects(Position::Reveal) {
+            return false;
+        }
         if self.location.contains(Location::Hand) {
             !self.position.intersects(Position::Faceup)
         } else {

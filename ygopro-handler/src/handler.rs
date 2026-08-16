@@ -38,10 +38,26 @@ where
 }
 
 #[derive(Debug)]
+pub struct StopFlag(pub bool);
+
+impl Default for StopFlag {
+    fn default() -> Self {
+        Self(false)
+    }
+}
+
+#[derive(Debug)]
 pub struct Bundle<Req, State = crate::handler::State, Res = ()> {
     pub request: Req,
     pub state: State,
     pub response: Res,
+    pub stop_flag: StopFlag    
+}
+
+impl<Req, State, Res> Bundle<Req, State, Res> {
+    pub fn new(request: Req, state: State, response: Res) -> Self {
+        Bundle { request, state, response, stop_flag: Default::default() }
+    }
 }
 
 pub trait Handler<T, Req, State, Res>: Clone + Send + Sync + Sized + 'static
@@ -216,7 +232,7 @@ pub mod tower_handler {
         H: Handler<T, Req, State, Res> + Clone,
         Req: Send + 'static,
         State: Send + 'static,
-        Res: Send + 'static,
+        Res: Send + 'static + std::ops::Mul<Output = Res>,
     {
         type Response = Bundle<Req, State, Res>;
         type Error = Infallible;
@@ -243,6 +259,7 @@ pub mod tower_handler {
     impl<F, Req, State, Res> Future for HandlerServiceFuture<F, Req, State, Res>
     where
         F: Future<Output = Option<Res>>,
+        Res: std::ops::Mul<Output = Res>,
     {
         type Output = Result<Bundle<Req, State, Res>, Infallible>;
 
@@ -251,7 +268,7 @@ pub mod tower_handler {
             match this.future.poll(cx) {
                 Poll::Ready(Some(response)) => {
                     let mut bundle = this.bundle.take().unwrap();
-                    bundle.response = response;
+                    bundle.response = bundle.response * response;
                     Poll::Ready(Ok(bundle))
                 }
                 Poll::Ready(None) => {
@@ -275,7 +292,7 @@ pub mod tower_handler {
     where
         Req: Send + 'static,
         State: Send + 'static,
-        Res: Send + 'static,
+        Res: Send + std::ops::Mul<Output = Res> + 'static,
     {
         pub fn new<T: 'static>(
             priority: u8,
@@ -376,14 +393,14 @@ pub mod async_handler {
         T: 'static,
         Req: Send + 'static,
         State: Send + 'static,
-        Res: Send + 'static,
+        Res: Send + std::ops::Mul<Output = Res> + 'static,
     {
         fn call(&self, bundle: Bundle<Req, State, Res>) -> Pin<Box<dyn Future<Output = Bundle<Req, State, Res>> + Send>> {
             let handler = self.handler.clone();
             Box::pin(async move {
                 let mut bundle = bundle;
                 if let Some(response) = handler.call(&mut bundle).await {
-                    bundle.response = response;
+                    bundle.response = bundle.response * response;
                 }
                 bundle
             })
@@ -414,7 +431,7 @@ pub mod async_handler {
     where
         Req: Send + 'static,
         State: Send + 'static,
-        Res: Send + 'static,
+        Res: Send + std::ops::Mul<Output = Res> + 'static,
     {
         pub fn new<T: 'static, H: Handler<T, Req, State, Res>>(
             priority: u8,
@@ -553,13 +570,13 @@ pub mod sync_handler {
     where
         Req: Send,
         State: Send,
-        Res: Send,
+        Res: Send + std::ops::Mul<Output = Res>,
     {
         fn call(&self, bundle: Bundle<Req, State, Res>) -> Pin<Box<dyn Future<Output = Bundle<Req, State, Res>> + Send>> {
             let mut bundle = bundle;
             let result = unsafe { (self.call_fn)(self.handler_pointer, &mut bundle) };
             if let Some(response) = result {
-                bundle.response = response;
+                bundle.response = bundle.response * response;
             }
             let boxed: Box<dyn Future<Output = Bundle<Req, State, Res>> + Send> = Box::new(std::future::ready(bundle));
             unsafe {

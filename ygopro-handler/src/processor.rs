@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use futures::Stream;
 use futures::StreamExt;
 use hashbrown::HashMap;
+use hashbrown::HashSet;
 use ygopro_data::complex;
 use ygopro_data::every_client_to_server_flat_message;
 use ygopro_data::every_game_message_flat_message;
@@ -20,6 +21,22 @@ pub fn resolve_globals<K, H: Clone>(handlers: &mut HashMap<K, Vec<H>>, global_ha
     for list in handlers.values_mut() {
         list.extend(global_handlers.iter().cloned());
         list.sort_unstable_by_key(&key);
+    }
+}
+
+/// A pure flag whose only meaning is its name.
+/// Used as a handler key it resolves to 0, letting the call site register
+/// the handler as a global one via `register_global`.
+#[derive(Debug)]
+pub struct All {
+    _private: (),
+}
+
+impl ygopro_data::message::PureMessage for All {}
+
+impl ygopro_data::message::Message for All {
+    fn message_type() -> ygopro_data::message::all::MessageType {
+        ygopro_data::message::all::MessageType::Other("all", 0)
     }
 }
 
@@ -99,6 +116,50 @@ where
         }
     }
 
+    pub fn handler_count(&self) -> usize {
+        self.handlers.values().map(|handlers| handlers.len()).sum::<usize>() + self.global_handlers.len()
+    }
+
+    pub fn handler_statistics(&self, module_name_of: fn(&H) -> &'static str) -> hashbrown::HashMap<&'static str, usize> {
+        let mut handler_counts = hashbrown::HashMap::new();
+        for handlers in self.handlers.values() {
+            for handler in handlers {
+                *handler_counts.entry(module_name_of(handler)).or_insert(0) += 1;
+            }
+        }
+        let mut global_counts = hashbrown::HashMap::new();
+        for handler in &self.global_handlers {
+            *global_counts.entry(module_name_of(handler)).or_insert(0) += 1;
+        }
+        // resolve() clones each global handler into every key list, so a module
+        // counts its own globals once per key list; drop the duplicate copies.
+        let key_list_count = self.handlers.len();
+        for (module_name, global_count) in global_counts {
+            let duplicated_copies = global_count * key_list_count.saturating_sub(1);
+            if let Some(count) = handler_counts.get_mut(&module_name) {
+                *count -= duplicated_copies;
+            }
+        }
+        handler_counts
+    }
+
+    pub fn new_with_groups(builders: &[fn() -> (Key, H)], groups: &HashSet<String>, group_of: fn(&H) -> &'static str, is_all: impl Fn(&Key) -> bool) -> Self where H: Clone {
+        let mut processor = Self::new();
+        for build in builders {
+            let (key, handler) = build();
+            if !groups.is_empty() && !groups.contains(group_of(&handler)) {
+                continue;
+            }
+            if is_all(&key) {
+                processor.register_global(handler);
+            } else {
+                processor.register(key, handler);
+            }
+        }
+        processor.resolve();
+        processor
+    }
+
     pub fn register(&mut self, message_key: Key, handler: H) {
         self.handlers.entry(message_key).or_default().push(handler);
     }
@@ -119,6 +180,7 @@ where
         let mut bundle = bundle;
         for handler in handlers {
             bundle = handler.call(bundle).await;
+            if bundle.stop_flag.0 { break }
         }
         bundle
     }
@@ -154,14 +216,12 @@ where
     }
 }
 
-/// Bundle factory for [`Default`]-constructible types.
-///
-/// Pass this as the `assemble_bundle` argument to [`Processor::process`].
 pub fn default_bundle<Req, State: Default, Res: Default>(request: Req) -> Bundle<Req, State, Res> {
     Bundle {
         request,
         state: State::default(),
         response: Res::default(),
+        stop_flag: Default::default()
     }
 }
 

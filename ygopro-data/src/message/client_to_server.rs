@@ -57,7 +57,7 @@ pub struct PlayerInfo {
 #[message(ctos, flag = 17)]
 #[repr(C)]
 pub struct CreateGame {
-    pub info: HostInfo,
+    pub host_info: HostInfo,
     pub name: FixedLengthString<20>,
     pub pass: FixedLengthString<20>
 }

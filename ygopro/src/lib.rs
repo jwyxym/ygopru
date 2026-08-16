@@ -1,6 +1,8 @@
 pub mod single_duel;
 pub mod common;
 pub mod managers;
+pub mod plugin;
+pub mod message;
 #[cfg(feature = "zip")]
 pub mod ypk;
 
@@ -21,7 +23,6 @@ pub fn init() {
     managers::data_manager::init();
     managers::deck_manager::init();
     init_core();
-    single_duel::init();
 }
 
 pub fn init_core() {

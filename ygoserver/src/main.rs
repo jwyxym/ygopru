@@ -1,5 +1,4 @@
-﻿use std::io::Cursor;
-use std::ops::Deref;
+use std::io::Cursor;
 
 use base64::Engine;
 use binrw::BinRead;
@@ -8,6 +7,7 @@ use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
 use tokio_util::codec::LengthDelimitedCodec;
 
+use ygopro::Configuration;
 use ygopro::SingleDuel;
 use ygopro_core_wrapper::random::SEED_COUNT;
 use ygopro_core_wrapper::DuelSeed;
@@ -85,14 +85,14 @@ async fn start_server(port: u16, hostinfo: HostInfo, replay_mode: ReplayMode, pr
     let port = listener.local_addr().expect("Failed to get random port").port();
     println!("{port}");
     log::info!("listening on port {port}");
-    let mut configuration = ygopro::managers::config_manager::get_duel_configuration();
+    let mut configuration = Configuration::default();
     configuration.seed_generator = Some(Box::new(move |duel_count: u8| {
         match pre_seeds.get(duel_count as usize).copied() {
             Some(seed) => DuelSeed::Complicated(seed),
             None => DuelSeed::None,
         }
     }));
-    configuration.replay_mode = replay_mode;
+    configuration.enable_plugin_with_configuration(ygopro::plugin::replay::NAME, ygopro::plugin::replay::Configuration { mode: replay_mode });
     let (mut duel, handle) = SingleDuel::new(hostinfo, configuration);
 
     tokio::spawn(async move {
@@ -111,9 +111,7 @@ async fn start_server(port: u16, hostinfo: HostInfo, replay_mode: ReplayMode, pr
             let ctos_stream = framed_read.filter_map(|result| match result {
                 Ok(frame) => {
                     let mut cursor = Cursor::new(&frame);
-                    ctos::Message::read_le(&mut cursor).ok().inspect(|message| {
-                        log::trace!("CTOS: {message:?}");
-                    })
+                    ctos::Message::read_le(&mut cursor).ok()
                 }
                 Err(_) => None,
             });
@@ -122,7 +120,6 @@ async fn start_server(port: u16, hostinfo: HostInfo, replay_mode: ReplayMode, pr
 
             tokio::spawn(async move {
                 while let Some(message) = stoc_stream.next().await {
-                    log::trace!("STOC: {:?}", message.deref());
                     framed_write.send(message.data).await.ok();
                 }
             });

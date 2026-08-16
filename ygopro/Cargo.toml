@@ -13,6 +13,9 @@ futures = "0.3"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 parking_lot = { version = "0", features = ["arc_lock", "send_guard"] }
+env_logger = { version = "0.11", features = ["auto-color", "humantime"] }
+anymap3 = { version = "1", default-features = false, features = ["hashbrown"] }
+base64 = "0.22"
 bytes = "1"
 log = "0.4"
 arc-swap = "1"
@@ -28,10 +31,9 @@ ygopro-data.workspace = true
 ygopro-core-wrapper = { path = "../ygopro-core-wrapper", default-features = false }
 ygopro-handler = { path = "../ygopro-handler", default-features = false }
 ygopro-derive = { path = "../ygopro-derive" }
-anymap3 = "1.1.0"
 
 [features]
-default = ["zip"]
+default = ["zip", "card"]
 zip = ["dep:zip"]
 card = [
     "ygopro-core-wrapper/card",

@@ -61,7 +61,7 @@ unsafe extern "C" {
 pub struct Duel {
     duel_pointer: intptr_t,
     shuffler: random::MTRandom,
-    ended: bool
+    pub ended: bool
 }
 
 static DUEL_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());

@@ -6,28 +6,29 @@ use binrw::BinRead;
 use tokio::sync::mpsc;
 
 use ygopro_core_wrapper as core;
-use ygopro_data::constants::CorePlayer;
-use ygopro_data::constants::DuelStage;
-use ygopro_data::constants::Location;
-use ygopro_data::constants::Netplayer;
-use ygopro_data::constants::Query;
+use ygopro_data::constants::*;
 use ygopro_data::data::CardPosition;
-use ygopro_data::data::ReplayMode;
 use ygopro_data::data::UpdateCardInfo;
 use ygopro_data::message::HostInfo;
-use ygopro_data::message::ctos;
-use ygopro_data::message::gm;
+use ygopro_data::message::{ctos, stoc, gm};
 use ygopro_data::message::gm::CardCode;
-use ygopro_data::message::stoc;
 use ygopro_data::string::FixedLengthString;
+use ygopro_handler::FromRequest;
 use ygopro_handler::sync_handler::SyncHandler;
+use ygopro_handler::extract::ContainsMapMut;
+
+use crate::plugin::CONFIGURATIONS;
+use crate::plugin::DEFAULT_ENABLED_PLUGINS;
 
 pub type Request = ygopro_handler::extract::Request<ctos::Message, Netplayer>; 
+pub type RequestEx = ygopro_handler::extract::Request<crate::message::Message, SendTarget>;
 pub type Response = ygopro_handler::extract::Response<stoc::Message>;
 pub type Handler<Duel> = SyncHandler<Request, State<Duel>, Response>;
+pub type HandlerEx<Duel> = SyncHandler<RequestEx, State<Duel>, Response>;
 
 pub struct State<Duel: 'static> {
-    pub duel: Duel
+    pub duel: Duel,
+    pub states: anymap3::Map<dyn std::any::Any + Send>,
 }
 
 impl<Duel> Deref for State<Duel> {
@@ -41,6 +42,12 @@ impl<Duel> Deref for State<Duel> {
 impl<Duel> DerefMut for State<Duel> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.duel
+    }
+}
+
+impl<Duel: 'static> ContainsMapMut for State<Duel> {
+    fn get_map(&mut self) -> &mut anymap3::Map<dyn std::any::Any + Send> {
+        &mut self.states
     }
 }
 
@@ -71,54 +78,29 @@ impl<Message> DuelPlayer<Message> {
     }
 }
 
-// fuck rust compiler
 impl<Message> AsMut<DuelPlayer<Message>> for DuelPlayer<Message> {
     fn as_mut(&mut self) -> &mut DuelPlayer<Message> { self }
 }
 
 pub struct Configuration {
     pub no_mask: bool,
-    pub no_init_shuffle_deck: bool,
-    // todo: move it to plugin <soumatou>
-    pub allow_join_after_start: bool,
-    pub terminate_when_retry: bool,
     pub seed_generator: Option<Box<dyn FnMut(u8) -> core::DuelSeed + Send>>,
-    // todo: move it to plguin <bo>
-    pub override_best_of: u8,
-    // I don't like this field while most of these fields should be implemented in srvpro instead of ygopro.
-    // So this field is only recorded here and will not get a implementation.
-    // todo: move it to plugin <replay>
-    pub replay_mode: ReplayMode,
-    /// Extra scripts preloaded into every core duel after creation.
-    /// Mirrors preload_script(pduel, "./script/special.lua") in ../ygopro/gframe/single_duel.cpp:583.
-    pub preloaded_scripts: Vec<String>,
-    // todo: move them to plugin <>
-    pub add_time_after_operation: u16,
-    pub max_add_time_each_turn: u16,
-    // todo: move it to plugin <>
-    pub ignore_small_time_under_this_duration: u16, 
-    pub add_small_time_deposit_after_operation: u16,
-    // todo: move it to plugin <terminate>
-    pub terminate_when: SendTarget
+    pub(crate) enable_plugins: hashbrown::HashSet<String>,
+    pub(crate) configurations: anymap3::Map<dyn anymap3::CloneAny + Send>
 }
 
 impl Default for Configuration {
     fn default() -> Self {
-        Self {
+        let mut configuration = Self {
             no_mask: false,
-            no_init_shuffle_deck: false,
-            allow_join_after_start: true,
-            terminate_when_retry: false,
             seed_generator: None,
-            override_best_of: 0,
-            replay_mode: ReplayMode::empty(),
-            preloaded_scripts: vec!["./script/special.lua".to_string()],
-            add_time_after_operation: 1,
-            max_add_time_each_turn: 0,
-            ignore_small_time_under_this_duration: 10, 
-            add_small_time_deposit_after_operation: 1,
-            terminate_when: SendTarget::All,
+            enable_plugins: hashbrown::HashSet::new(),
+            configurations: anymap3::Map::new()
+        };
+        for name in DEFAULT_ENABLED_PLUGINS {
+            configuration.enable_plugin(name);
         }
+        configuration
     }
 }
 
@@ -126,20 +108,34 @@ impl Configuration {
     pub fn seed(&mut self, match_count: u8) -> core::DuelSeed {
         match &mut self.seed_generator {
             Some(generator) => generator(match_count),
-            None => default_seed_generator(match_count),
+            None => core::DuelSeed::None,
         }
     }
-}
 
-fn default_seed_generator(_match_count: u8) -> core::DuelSeed {
-    return core::DuelSeed::None
+    pub fn enable_plugin(&mut self, plugin_name: &str) {
+        for (name, init_config) in CONFIGURATIONS {
+            if plugin_name == *name {
+                init_config(&mut self.configurations).ok();
+            }
+        }
+        self.enable_plugins.insert(plugin_name.to_string());
+    }
+
+    pub fn enable_plugin_with_configuration<PluginConfiguration>(&mut self, plugin_name: &str, configuration: PluginConfiguration) where PluginConfiguration: Clone + Send + 'static {
+        self.enable_plugins.insert(plugin_name.to_string());
+        self.configurations.insert(configuration);
+    }
+
+    pub fn disable_plugin(&mut self, plugin_name: &str) {
+        self.enable_plugins.remove(plugin_name);
+    }
 }
 
 pub struct Duel {
     pub host_player: Netplayer,
     pub host_info: HostInfo,
     pub stage: DuelStage,
-    pub duel: core::Duel,
+    pub core: core::Duel,
     pub name: FixedLengthString<20>,
     pub pass: FixedLengthString<20>,
 }
@@ -148,20 +144,22 @@ impl Deref for Duel {
     type Target = core::Duel;
 
     fn deref(&self) -> &Self::Target {
-        &self.duel
+        &self.core
     }
 }
 
 impl DerefMut for Duel {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.duel
+        &mut self.core
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub enum SendTarget {
     Single(Netplayer),
     Except(Netplayer),
+    Core(CorePlayer),
+    #[default]
     All,
     AllPlayer,
     AllObserver,
@@ -171,6 +169,19 @@ pub enum SendTarget {
 impl From<Netplayer> for SendTarget {
     fn from(value: Netplayer) -> Self {
         SendTarget::Single(value)
+    }
+}
+
+impl From<CorePlayer> for SendTarget {
+    fn from(value: CorePlayer) -> Self {
+        SendTarget::Core(value)
+    }
+}
+
+impl<Message, State, Res> FromRequest<ygopro_handler::extract::Request<Message, SendTarget>, State, Res> for &mut SendTarget
+where State: Send, Res: Send, Message: Send {
+    fn from_request(bundle: &mut ygopro_handler::Bundle<ygopro_handler::extract::Request<Message, SendTarget>, State, Res>) -> Option<Self> {
+        Some(unsafe { &mut *(&mut bundle.request.extra as *mut SendTarget) })
     }
 }
 

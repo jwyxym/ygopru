@@ -20,6 +20,29 @@ use crate::data::UpdateCardInfo;
 include!(concat!(env!("OUT_DIR"), "/game_message.rs"));
 every_game_message_flat_message!(crate::generate_enum);
 
+macro_rules! impl_into_stoc_message {
+    ($($message_name:ident=$message_flag:literal),*) => {
+        $(
+            impl From<$message_name> for crate::message::server_to_client::Message {
+                fn from(value: $message_name) -> Self {
+                    crate::message::server_to_client::Message::GameMessage(
+                        crate::message::server_to_client::GameMessage { message: value.into() }
+                    )
+                }
+            }
+        )*
+    };
+}
+every_game_message_flat_message!(impl_into_stoc_message);
+
+impl From<crate::message::game_message::Message> for crate::message::server_to_client::Message {
+    fn from(value: crate::message::game_message::Message) -> Self {
+        crate::message::server_to_client::Message::GameMessage(
+            crate::message::server_to_client::GameMessage { message: value }
+        )
+    }
+}
+
 
 pub trait GameMessage {
     fn mask(&mut self);

@@ -1,3 +1,4 @@
+use darling::FromMeta;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::ItemFn;
@@ -6,73 +7,61 @@ use syn::Path;
 use syn::Ident;
 use syn::Token;
 
-pub struct ParsedArgs {
-    #[allow(dead_code)]
-    pub key: Path,
-    #[allow(dead_code)]
-    pub priority: Option<syn::Lit>,
+#[derive(FromMeta)]
+struct HandlerArgs {
+    #[darling(default)]
+    priority: Option<u8>,
 }
 
-pub fn parse_args(attr: &[NestedMeta]) -> Result<ParsedArgs, syn::Error> {
-    let mut key: Option<Path> = None;
-    let mut priority: Option<syn::Lit> = None;
+pub struct ParsedArgs {
+    pub key: Path,
+    pub priority: u8,
+}
 
-    for item in attr {
-        match item {
-            NestedMeta::Lit(lit) => {
-                priority = Some(lit.clone());
-            }
-            NestedMeta::Meta(meta) => match meta {
-                syn::Meta::Path(path) => {
-                    if key.is_some() {
-                        return Err(syn::Error::new_spanned(path, "duplicate key"));
-                    }
-                    key = Some(path.clone());
-                }
-                syn::Meta::NameValue(name_value) => {
-                    if name_value.path.is_ident("message") {
-                        if let syn::Lit::Str(lit_str) = &name_value.lit {
-                            let path: Path = lit_str.parse().map_err(|e| {
-                                syn::Error::new_spanned(&name_value.lit, format!("invalid path: {}", e))
-                            })?;
-                            if key.is_some() {
-                                return Err(syn::Error::new_spanned(&name_value, "duplicate key"));
-                            }
-                            key = Some(path);
-                        } else {
-                            return Err(syn::Error::new_spanned(&name_value, "message must be a string"));
-                        }
-                    } else if name_value.path.is_ident("priority") {
-                        priority = Some(name_value.lit.clone());
-                    } else {
-                        return Err(syn::Error::new_spanned(&name_value.path, "unknown attribute"));
-                    }
-                }
-                syn::Meta::List(list) => {
-                    return Err(syn::Error::new_spanned(list, "unexpected list"));
-                }
-            },
-        }
-    }
-
-    let key = key.ok_or_else(|| {
-        syn::Error::new(proc_macro2::Span::call_site(), "missing key or message")
-    })?;
-
+pub fn parse_args(attr: &[NestedMeta], transform_priority: impl Fn(Option<u8>) -> u8) -> Result<ParsedArgs, darling::Error> {
+    let key = attr.iter().find_map(|item| match item {
+        NestedMeta::Meta(syn::Meta::Path(path)) => Some(path.clone()),
+        _ => None,
+    });
+    let key = key.ok_or_else(|| darling::Error::custom("missing key or message"))?;
+    let named: Vec<NestedMeta> = attr.iter()
+        .filter(|item| !matches!(item, NestedMeta::Meta(syn::Meta::Path(_))))
+        .cloned()
+        .collect();
+    let args = HandlerArgs::from_list(&named)?;
+    let priority = transform_priority(args.priority);
     Ok(ParsedArgs { key, priority })
 }
 
 pub struct RegisterInfo {
     #[allow(dead_code)]
-    pub slice_expression: syn::Expr,
+    pub slice_expression: syn::Path,
     pub handler_type: syn::Type,
     pub key_type: syn::Type,
 }
 
+pub fn parse_registers(function: &ItemFn) -> Vec<RegisterInfo> {
+    let mut register_infos = Vec::new();
+    for attr in &function.attrs {
+        if attr.path.is_ident("register_to") {
+            if let Ok(info) = parse_register_info(attr.tokens.clone()) {
+                register_infos.push(info);
+            }
+        }
+    }
+    register_infos
+}
+
 pub fn parse_register_info(tokens: TokenStream2) -> syn::Result<RegisterInfo> {
+    // `#[handler]` passes the attribute tokens wrapped in parens, while the
+    // standalone `#[register_to]` macro receives them without delimiters.
+    let tokens = match tokens.clone().into_iter().collect::<Vec<_>>().as_slice() {
+        [proc_macro2::TokenTree::Group(group)] if group.delimiter() == proc_macro2::Delimiter::Parenthesis => group.stream(),
+        _ => tokens,
+    };
     syn::parse::Parser::parse2(
         |input: syn::parse::ParseStream| {
-            let slice_expression = input.parse::<syn::Expr>()?;
+            let slice_expression = input.parse::<syn::Path>()?;
 
             let handler_type = if input.peek(Token![as]) {
                 input.parse::<Token![as]>()?;
@@ -94,7 +83,7 @@ pub fn parse_register_info(tokens: TokenStream2) -> syn::Result<RegisterInfo> {
     )
 }
 
-fn extract_type_suffix(ty: &syn::Type) -> String {
+pub(crate) fn extract_type_suffix(ty: &syn::Type) -> String {
     match ty {
         syn::Type::Path(type_path) => {
             type_path.path.segments.last()
@@ -109,20 +98,11 @@ pub fn shared_impl(args: ParsedArgs, function: ItemFn) -> TokenStream2 {
     let function_ident = &function.sig.ident;
     let function_name = function_ident.to_string();
 
-    let priority = args.priority
-        .map(|lit| quote! { #lit })
-        .unwrap_or_else(|| quote! { 128 });
+    let priority = args.priority;
 
     let key = args.key;
 
-    let mut register_infos = Vec::new();
-    for attr in &function.attrs {
-        if attr.path.is_ident("register_to") {
-            if let Ok(info) = parse_register_info(attr.tokens.clone()) {
-                register_infos.push(info);
-            }
-        }
-    }
+    let register_infos = parse_registers(&function);
 
     if register_infos.is_empty() {
         let error = syn::Error::new(

@@ -30,7 +30,8 @@ pub enum Network {
 pub enum Netplayer {
     Player(u8),
     Observer(u8),
-    Unknown = 255
+    Undecided(u8),
+    Unknown
 }
 
 impl FromPrimitive for Netplayer {
@@ -48,6 +49,7 @@ impl From<Netplayer> for u8 {
         match value {
             Netplayer::Player(index) => index,
             Netplayer::Observer(_) => 7,
+            Netplayer::Undecided(_) => 255,
             Netplayer::Unknown => 255,
         }
     }
@@ -116,6 +118,20 @@ impl From<CorePlayer> for Netplayer {
             CorePlayer::None => Netplayer::Unknown,
             CorePlayer::All => Netplayer::Unknown,
             CorePlayer::Rule => Netplayer::Unknown,
+        }
+    }
+}
+
+impl std::ops::Mul for CorePlayer {
+    type Output = CorePlayer;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        if self == rhs { return self; }
+        match (self, rhs) {
+            (CorePlayer::None, _) => rhs,
+            (_, CorePlayer::None) => self,
+            (CorePlayer::Rule, _) | (_, CorePlayer::Rule) => CorePlayer::Rule,
+            (_, _) => CorePlayer::All
         }
     }
 }
@@ -275,6 +291,7 @@ bitflags! {
         const Facedown = 0xa;
         const Attack = 0x3;
         const Defense = 0xc;
+        const Reveal = 0x80;
         // NoFlipEffect = 0x10000
     }
 }

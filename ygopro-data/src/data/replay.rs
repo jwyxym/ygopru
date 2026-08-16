@@ -169,6 +169,12 @@ pub struct ReplayData {
     pub data: Response
 }
 
+impl From<Response> for ReplayData {
+    fn from(value: Response) -> Self {
+        ReplayData { data: value }
+    }
+}
+
 #[derive(BinRead, BinWrite, Debug, Clone)]
 pub struct Replay {
     pub header: ReplayHeader,

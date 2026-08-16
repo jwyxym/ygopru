@@ -36,7 +36,7 @@ impl Default for HostInfo {
         Self { 
             lflist: 0, 
             rule: Rule::OCG,
-            mode: crate::constants::Mode::Single, 
+            mode: crate::constants::Mode::Match, 
             duel_rule: MasterRule::MasterRule2020,
             no_check_deck: false, 
             no_shuffle_deck: false, 

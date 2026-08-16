@@ -4,6 +4,7 @@ use std::ops::DerefMut;
 use bytes::BytesMut;
 use log::warn;
 use futures::Stream;
+use linkme::distributed_slice;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt;
@@ -19,46 +20,44 @@ use ygopro_data::message::ctos;
 use ygopro_data::message::stoc;
 use ygopro_data::message::gm;
 use ygopro_data::message::gm::GameMessage;
-use ygopro_handler::RoomProvider;
+use ygopro_handler::Call;
 use ygopro_handler::Bundle;
 use ygopro_handler::FromRequest;
 use ygopro_handler::MessageKey;
+use ygopro_handler::RoomProvider;
+use ygopro_handler::extract::ContainsMap;
+use ygopro_handler::sync_handler::SyncHandler;
 
 use crate::common;
 use crate::common::Configuration;
-use crate::common::Response;
 use crate::common::SendTarget;
 use crate::common::State;
 
-pub fn init() {
-    ygopro_handlers::reset_processor();
-    ygocore_handlers::reset_processor(); 
-}
-
-
 pub enum Request {
-    Join { stoc_sender: mpsc::UnboundedSender<Complex<stoc::Message>> },
     Message(common::Request),
+    MessageEx(common::RequestEx),
     TimerTick,
     /// call ygocore to push the game state.
     /// produced by duel start and ctos response.
     Evolve,
-    /// resend all history to target observer.
-    /// produced by observer join on middle of duel.
-    Soumatou(Netplayer),
-    Stop
+    Command { name: &'static str, arguments: [u8; 8] }
 }
+
+pub type CommandHandler = SyncHandler<ygopro_handler::extract::Request<[u8; 8], ()>, common::State<SingleDuel>, ygopro_handler::extract::Response<()>>;
+
+#[distributed_slice]
+pub static COMMANDS: [fn() -> (&'static str, CommandHandler)];
 
 type BaseDuelPlayer = common::DuelPlayer<Complex<stoc::Message>>;
 pub struct DuelPlayer {
-    player: BaseDuelPlayer,
-    ready: bool,
-    deck: Deck,
-    hand: Option<Hand>,
-    deck_error: Option<DeckError>,
-    time_limit: u16,
-    time_compensator: u16,
-    time_backed: u16,
+    pub player: BaseDuelPlayer,
+    pub ready: bool,
+    pub deck: Deck,
+    pub hand: Option<Hand>,
+    pub deck_error: Option<DeckError>,
+    pub time_limit: u16,
+    pub time_compensator: u16,
+    pub time_backed: u16,
 }
 
 impl From<BaseDuelPlayer> for DuelPlayer {
@@ -101,10 +100,10 @@ impl<Response> FromRequest<common::Request, State<SingleDuel>, Response> for &mu
 }
 
 /// PlayerIndex is the super strict version of Netplayer.
-/// It only accepts Netplyaer(0) and Netplayer(1).
-/// It supposed to work just as Netplayer works.
+/// It only accepts Netplyaer::Player(0) and Netplayer::Player(1).
+/// It is supposed to work just as Netplayer works.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, PartialOrd, Ord, Hash)]
-#[repr(u8)]
+#[repr(usize)]
 pub enum PlayerIndex {
     Player1 = 0,
     Player2 = 1
@@ -162,42 +161,69 @@ impl<State, Res> FromRequest<common::Request, State, Res> for PlayerIndex where 
     }
 }
 
-struct SingleDuel {
-    duel: common::Duel,
-    players: [Option<DuelPlayer>; 2], 
-    observers: Vec<Option<BaseDuelPlayer>>,
+impl ContainsMap for common::State<SingleDuel> {
+    fn get_map(&self) -> &anymap3::Map<dyn anymap3::CloneAny + Send> {
+        &self.duel.configuration.configurations
+    }
+}
+
+pub struct SingleDuel {
+    pub duel: common::Duel,
+    pub players: [Option<DuelPlayer>; 2], 
+    pub observers: Vec<Option<BaseDuelPlayer>>,
     first_attack_player: Option<PlayerIndex>,
     first_attack_decider: Option<PlayerIndex>,
-    last_response: Option<PlayerIndex>,
+    pub last_response: Option<PlayerIndex>,
     match_kill_card_code: i32,
     duel_count: u8,
-    duel_winner: Vec<Option<PlayerIndex>>,
-    time_elapsed: u16,
-    // these fields are only for request_field.
-    // that message are actually inner core.
-    // that make ygopro works like srvpro, which make us think that should be a Room attachment instead.
-    phase: Phase,
-    deck_reversed: bool,
-    turn_player: CorePlayer,
-    last_select_message: Option<gm::Message>,
+    pub duel_winner: Vec<Option<PlayerIndex>>,
+    pub time_elapsed: u16,
+    pub last_select_message: Option<gm::Message>,
     // extended by rust ygopro
     response_buffer: BytesMut,
-    core_request_buffer: BytesMut,
-    configuration: Configuration,
+    pub core_request_buffer: BytesMut,
+    pub configuration: Configuration,
     timer_task: Option<tokio::task::JoinHandle<()>>,
-    last_init_player: Option<BaseDuelPlayer>,
+    pub uninit_players: Vec<Option<BaseDuelPlayer>>,
     // replay recorder
     start_time: u32,
-    messages: Vec<Complex<stoc::Message>>,
-    masked_messages: Vec<Complex<stoc::Message>>,
+    pub messages: Vec<Complex<stoc::Message>>,
+    pub masked_messages: Vec<Complex<stoc::Message>>,
     client_responses: Vec<ctos::Response>,
     // extended by actor models
-    request_sender: mpsc::UnboundedSender<Request>,
+    pub request_sender: mpsc::UnboundedSender<Request>,
     request_receiver: Option<mpsc::UnboundedReceiver<Request>>,
 }
 
+fn log_plugin_statistics(
+    enabled_plugins: &hashbrown::HashSet<String>,
+    ygopro_handler_counts: &hashbrown::HashMap<&'static str, usize>,
+    ygopro_ex_handler_counts: &hashbrown::HashMap<&'static str, usize>,
+    ygocore_handler_counts: &hashbrown::HashMap<&'static str, usize>,
+    command_counts: &hashbrown::HashMap<&'static str, usize>,
+) {
+    let mut sorted_plugins = enabled_plugins.iter().collect::<Vec<_>>();
+    sorted_plugins.sort();
+    log::debug!("enabled plugins and their handlers:");
+    for plugin_name in sorted_plugins {
+        let ygopro_count = ygopro_handler_counts.get(plugin_name.as_str()).copied().unwrap_or(0);
+        let ygopro_ex_count = ygopro_ex_handler_counts.get(plugin_name.as_str()).copied().unwrap_or(0);
+        let ygocore_count = ygocore_handler_counts.get(plugin_name.as_str()).copied().unwrap_or(0);
+        let command_count = command_counts.get(plugin_name.as_str()).copied().unwrap_or(0);
+        let handler_parts = [(ygopro_count, "ygopro handlers"), (ygopro_ex_count, "ygopro ex handlers"), (ygocore_count, "ygocore handlers"), (command_count, "command")]
+            .into_iter()
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, label)| format!("{count} {label}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let has_configuration = crate::plugin::CONFIGURATIONS.iter().any(|(name, _)| *name == plugin_name.as_str());
+        let configuration_part = if has_configuration { ", configured" } else { "" };
+        log::debug!("  {plugin_name}: {handler_parts}{configuration_part}");
+    }
+}
+
 impl SingleDuel {
-    pub fn new(host_info: HostInfo, mut configuration: Configuration) -> Self {
+    fn new(host_info: HostInfo, mut configuration: Configuration) -> Self {
         let seed = configuration.seed(0);
         let (request_sender, request_receiver) = mpsc::unbounded_channel();
         Self {
@@ -205,7 +231,7 @@ impl SingleDuel {
                 host_player: Netplayer::Unknown,
                 host_info,
                 stage: DuelStage::Begin,
-                duel: core::Duel::new(seed),
+                core: core::Duel::new(seed),
                 name: FixedLengthString::allocate(),
                 pass: FixedLengthString::allocate(),
             },
@@ -214,9 +240,6 @@ impl SingleDuel {
             first_attack_player: None,
             last_response: None,
             first_attack_decider: None,
-            phase: Phase::Draw,
-            deck_reversed: false,
-            turn_player: CorePlayer::FirstAttackPlayer,
             last_select_message: None,
             match_kill_card_code: 0,
             duel_count: 0,
@@ -231,9 +254,27 @@ impl SingleDuel {
             client_responses: Vec::new(),
             request_sender,
             request_receiver: Some(request_receiver),
-            last_init_player: None,
+            uninit_players: vec![],
             timer_task: None,
         }
+    }
+
+    async fn run_processor<Req, Res, Handler>(self, processor: &ygopro_handler::Processor<u8, Req, State<Self>, Res, Handler>, request: Req, states: anymap3::Map<dyn std::any::Any + Send>)
+        -> (Self, Req, anymap3::Map<dyn std::any::Any + Send>, Res)
+        where Res: Default,
+              Req: MessageKey<u8>,
+              Handler: Call<Req, State<Self>, Res>
+    {
+        let state = State { duel: self, states };
+        let key = request.message_key();
+        let bundle = Bundle::new(request, state, Default::default());
+        let Bundle {
+            request,
+            state: common::State { duel: returned_duel, states: returned_states },
+            response,
+            stop_flag: _
+        } = processor.process_bundle(bundle, key).await;
+        (returned_duel, request, returned_states, response)
     }
 
     pub fn run(mut self) -> Option<tokio::task::JoinHandle<()>> {
@@ -241,31 +282,35 @@ impl SingleDuel {
         let mut stream = UnboundedReceiverStream::new(receiver);
 
         let handle = tokio::spawn(async move {
-            let ygopro_processor = ygopro_handlers::YGOPRO_PROCESSOR.get().expect("Processor not initialized").load_full();
-            let ygocore_processor = ygocore_handlers::YGOCORE_PROCESSOR.get().expect("Processor not initialized").load_full();
+            let enabled_groups = &self.configuration.enable_plugins;
+            let ygopro_processor = ygopro_handler::Processor::new_with_groups(&ygopro_handlers::YGOPRO_HANDLERS, &enabled_groups, |handler| handler.module_name, |key| *key == 0);
+            let ygopro_ex_processor = ygopro_handler::Processor::new_with_groups(&ygopro_handlers::YGOPRO_HANDLERS_EX, &enabled_groups, |handler| handler.module_name, |key| *key == 0);
+            let ygocore_processor = ygopro_handler::Processor::new_with_groups(&ygocore_handlers::YGOCORE_HANDLERS, &enabled_groups, |handler| handler.module_name, |key| *key == 0);
+
+            let command_processor: hashbrown::HashMap<&'static str, CommandHandler> = COMMANDS.iter().map(|build| build())
+                .filter(|(_, handler)| enabled_groups.contains(handler.module_name)).collect();
+            let ygopro_handler_counts = ygopro_processor.handler_statistics(|handler| handler.module_name);
+            let ygopro_ex_handler_counts = ygopro_ex_processor.handler_statistics(|handler| handler.module_name);
+            let ygocore_handler_counts = ygocore_processor.handler_statistics(|handler| handler.module_name);
+            let mut command_counts = hashbrown::HashMap::new();
+            for (_, command) in &command_processor {
+                *command_counts.entry(command.module_name).or_insert(0) += 1;
+            }
+            log_plugin_statistics(enabled_groups, &ygopro_handler_counts, &ygopro_ex_handler_counts, &ygocore_handler_counts, &command_counts);
             let mut duel = self;
+            let mut states: anymap3::Map<dyn std::any::Any + Send> = anymap3::Map::new();
 
             while let Some(request) = stream.next().await {
                 match request {
-                    Request::Join { stoc_sender } => {
-                        if duel.stage > DuelStage::Begin {
-                            if ! duel.configuration.allow_join_after_start {
-                                let error = stoc::ErrorMessage { err: ErrorMessage::JoinError(JoinError::HostRefused) }.into();
-                                stoc_sender.send(Complex::from_message(error)).ok();
-                                continue;
-                            }
-                        }
-                        if duel.last_init_player.is_some() { warn!("Two players are trying to init in the same duel.") }
-                        duel.last_init_player = Some(common::DuelPlayer::new(stoc_sender));
-                    },
                     Request::TimerTick => {
                         if let Some(last_response) = duel.last_response && duel.host_info.time_limit > 0 {
                             duel.time_elapsed = duel.time_elapsed.saturating_add(1);
                             let timed_out = duel.get_player_index(last_response)
                                     .map_or(false, |player| duel.time_elapsed >= player.time_limit);
                             if timed_out {
-                                let loser = duel.to_core_player(last_response);
-                                duel.win_and_end(loser, WinReason::Timeout);
+                                let winner = duel.to_core_player(last_response).opponent();
+                                duel.send(gm::Win { winner, reason: WinReason::Timeout }.into(), SendTarget::All);
+                                duel.send_request_ex(crate::message::DuelEnd { winner, reason: WinReason::Timeout });
                             }
                         }
                     },
@@ -274,15 +319,9 @@ impl SingleDuel {
                             warn!("Message type mismatch for player: {:?}, get {:?}, expected {:?}", request.extra, ctos::MessageType::from(&request.message), allowed);
                             continue;
                         }
-                        let state = common::State { duel };
-                        let bundle = Bundle { request, state, response: Default::default() };
-                        let key = bundle.request.message_key();
-                        let Bundle {
-                            request,
-                            state: common::State { duel: returned_duel },
-                            response
-                        } = ygopro_processor.process_bundle(bundle, key).await;
+                        let (returned_duel, request, returned_states, response) = duel.run_processor(&ygopro_processor, request, states).await;
                         duel = returned_duel;
+                        states = returned_states;
                         let position = request.extra;
                         match response {
                             ygopro_handler::extract::Response::Replace(message) => duel.send(message, position.into()),
@@ -294,51 +333,76 @@ impl SingleDuel {
                             },
                             ygopro_handler::extract::Response::Continue => {},
                             ygopro_handler::extract::Response::Swallow => {},
-                            ygopro_handler::extract::Response::Stop => { break; }
+                            ygopro_handler::extract::Response::Terminate => { break; }
                             ygopro_handler::extract::Response::Kick => duel.send(stoc::LeaveGame { pos: position }.into(), position.into())
+                        };
+                    },
+                    Request::MessageEx(request) => {
+                        let (returned_duel, request, returned_states, response) = duel.run_processor(&ygopro_ex_processor, request, states).await;
+                        duel = returned_duel;
+                        states = returned_states;
+                        match response {
+                            ygopro_handler::extract::Response::Replace(message) => duel.send(message, request.extra),
+                            ygopro_handler::extract::Response::ReplaceMultiple(messages) => {
+                                for message in messages {
+                                    duel.send(message, request.extra);
+                                };
+                            },
+                            ygopro_handler::extract::Response::Continue => request.message.process_continue(&mut duel),
+                            ygopro_handler::extract::Response::Swallow => {},
+                            ygopro_handler::extract::Response::Terminate => request.message.process_terminate(&mut duel),
+                            ygopro_handler::extract::Response::Kick => warn!("unhandled kick response in message ex processing"),
                         };
                     }
                     Request::Evolve => {
                         let messages = ygocore_handlers::evolve(&mut duel);
-                        if let Some(core_player) = messages.last().and_then(|m| m.waiting_for()) {
-                            ygocore_handlers::set_waiting(&mut duel, core_player);
-                        } else if messages.last().is_some_and(|m| matches!(m, gm::Message::Retry(_))) {
-                            duel.client_responses.pop();
-                            if let Some(core_player) = duel.last_response.map(|player| duel.to_core_player(player)) {
-                                ygocore_handlers::set_waiting(&mut duel, core_player);
-                            }
-                        }
                         for message in messages {
-                            let key = message.message_key();
-                            if gm::MessageType::from(&message) == gm::MessageType::Retry && duel.configuration.terminate_when_retry { break; }
                             let request = ygocore_handlers::Request { message, extra: Netplayer::Unknown };
-                            let state = common::State { duel };
-                            let bundle = Bundle { request, state, response: Default::default() };
-                            let Bundle {
-                                request,
-                                state: common::State { duel: mut returned_duel },
-                                response
-                            } = ygocore_processor.process_bundle(bundle, key).await;
-                            returned_duel.send_game_message(request.message, response.target);
-                            let (player, locations, sequence, query) = response.refresh;
-                            returned_duel.refresh(player, locations, sequence, query);
+                            let (returned_duel, request, returned_states, response) = duel.run_processor(&ygocore_processor, request, states).await;
                             duel = returned_duel;
-                            if duel.stage == DuelStage::End {
-                                break;
+                            states = returned_states;
+                            let (player, locations, sequence, query) = response.refresh;
+                            let is_select = request.message.waiting_for().is_some();
+                            if let Some(core_player) = request.message.waiting_for() {
+                                ygocore_handlers::set_waiting(&mut duel, core_player);
+                                duel.refresh(player, locations, sequence, query);
+                            } else if matches!(&request.message, gm::Message::Retry(_)) {
+                                duel.client_responses.pop();
+                                if let Some(core_player) = duel.last_response.map(|player| duel.to_core_player(player)) {
+                                    ygocore_handlers::set_waiting(&mut duel, core_player);
+                                }
                             }
+                            duel.send_game_message(request.message, response.target);
+                            if !is_select { duel.refresh(player, locations, sequence, query); }
                         }
                     },
-                    Request::Soumatou(player) => {
-                        let target = player.into();
-                        for message in &duel.masked_messages {
-                            duel._send(message.clone(), target);
-                        }
+                    Request::Command { name, arguments } => {
+                        let Some(handler) = command_processor.get(name) else {
+                            warn!("no command registered: {name}");
+                            continue;
+                        };
+                        let state = common::State { duel, states };
+                        let bundle = Bundle::new(ygopro_handler::extract::Request { message: arguments, extra: () }, state, Default::default());
+                        let bundle = handler.call(bundle).await;
+                        let Bundle {
+                            request: _,
+                            state: common::State { duel: returned_duel, states: returned_states },
+                            response,
+                            stop_flag: _
+                        } = bundle;
+                        duel = returned_duel;
+                        states = returned_states;
+                        match response {
+                            ygopro_handler::extract::Response::Terminate => { break },
+                            _ => ()
+                        };
                     },
-                    Request::Stop => {
-                        break
-                    }
                 }
             }
+            duel.run_processor(&ygopro_ex_processor, common::RequestEx { 
+                message: crate::message::Terminate.into(), 
+                extra: SendTarget::None
+            }, states).await;
         });
 
         Some(handle)
@@ -374,19 +438,18 @@ impl SingleDuel {
         self.observers.iter().fold(0, |s, v| { s + if v.is_some(){ 1 } else { 0 } }) as u16
     }
 
-    pub fn insert_observer(&mut self, player: BaseDuelPlayer) -> Netplayer {
-        let slot = self.observers.iter().position(|v| v.is_none());
-        let position = match slot {
+    pub fn insert_to_last_available_index(v: &mut Vec<Option<BaseDuelPlayer>>, player: BaseDuelPlayer) -> usize {
+        let slot = v.iter().position(|v| v.is_none());
+        match slot {
             Some(slot) => {
-                self.observers[slot] = Some(player);
-                slot as u8
+                v[slot] = Some(player);
+                slot
             }
             None => {
-                self.observers.push(Some(player));
-                self.observers.len() as u8 - 1
+                v.push(Some(player));
+                v.len() - 1
             }
-        };
-        Netplayer::Observer(position)
+        }
     }
 
     pub fn to_core_player(&self, player: PlayerIndex) -> CorePlayer {
@@ -431,7 +494,7 @@ impl SingleDuel {
         } 
     }
 
-    pub fn calculate_replay(&self) -> Option<Replay> {
+    pub fn create_replay_without_data(&self) -> Option<Replay> {
         let (host_player, client_player) = match self.first_attack_player? {
             PlayerIndex::Player1 => ( self.players[0].as_ref()?, self.players[1].as_ref()? ),
             PlayerIndex::Player2 => ( self.players[1].as_ref()?, self.players[0].as_ref()? ),
@@ -443,9 +506,6 @@ impl SingleDuel {
         }
         let host_deck = host_player.deck.clone().into();
         let client_deck = client_player.deck.clone().into();
-        let datas: Vec<ReplayData> = self.client_responses.iter().map(|response| ReplayData {
-            data: response.response.clone(),
-        }).collect();
         let mut replay = Replay { 
             header: ReplayHeader {
                 id: ReplayVersion::V2 as u32,
@@ -473,69 +533,11 @@ impl SingleDuel {
                 client_deck,
                 tag_host_deck: None,
                 tag_client_deck: None,
-                datas,
+                datas: vec![],
             }
         };
         replay.fill_data_size();
         Some(replay)
-    }
-
-    pub fn win_and_end(&mut self, loser: CorePlayer, reason: WinReason) {
-        let winner = loser.opponent();
-        let win_message = gm::Message::Win(gm::Win { winner, reason });
-        self.send(stoc::GameMessage { message: win_message }.into(), SendTarget::All);
-        let winner_netplayer = self.to_player_index(winner);
-        self.duel_winner.push(winner_netplayer);
-        let current_decider = self.first_attack_decider.unwrap_or(PlayerIndex::Player1);
-        self.first_attack_decider = Some(self.to_player_index(loser).unwrap_or(current_decider.opponent()));
-        self.duel_end();
-    }
-
-    fn should_match_end(&self) -> bool {
-        let mut end_count = self.configuration.override_best_of as usize;
-        if end_count == 0 { end_count = if self.host_info.mode == Mode::Match { 3 } else { 1 }; }
-        let end_win_count = (end_count + 1) / 2;
-        let mut player_wins = [0, 0];
-        for winner in &self.duel_winner {
-            match winner {
-                Some(PlayerIndex::Player1) => player_wins[0] += 1,
-                Some(PlayerIndex::Player2) => player_wins[1] += 1,
-                None => (),
-            }
-        }
-        self.duel_winner.len() >= end_count || player_wins[0] >= end_win_count || player_wins[1] >= end_win_count || self.match_kill_card_code > 0
-    }
-
-    pub fn duel_end(&mut self) {
-        if let Some(timer_task) = self.timer_task.take() {
-            timer_task.abort();
-        }
-        if let Some(replay) = self.calculate_replay() {
-            self.send(stoc::Replay{ replay: Box::new(replay) }.into(), SendTarget::All);
-        }
-        self.duel.end();
-        self.duel_count += 1;
-        if self.should_match_end() {
-            self.stage = DuelStage::End;
-            self.send(stoc::DuelEnd.into(), SendTarget::All);
-        } else {
-            for i in [0,1] {
-                if let Some(player) = self.players[i].as_mut() { 
-                    player.state = Some(ctos::MessageType::UpdateDeck);
-                    player.ready = false;
-                }
-            }
-            self.first_attack_player = None;
-            self.stage = DuelStage::Siding;
-            self.send(stoc::ChangeSide.into(), SendTarget::AllPlayer);
-            self.send(stoc::WaitingSide.into(), SendTarget::AllObserver);
-            self.end();
-            self.duel.duel = ygopro_core_wrapper::Duel::new(self.configuration.seed(self.duel_count));
-            // self.messages.clear();
-            // self.masked_messages.clear();
-            self.client_responses.clear();
-            self.deck_reversed = false;
-        }
     }
 
     fn send(&mut self, message: stoc::Message, target: SendTarget) {
@@ -560,11 +562,16 @@ impl SingleDuel {
                     observer.stoc_sender.send(message).ok();
                 }
             }
+            Netplayer::Undecided(index) => {
+                if let Some(Some(uninited)) = &self.uninit_players.get(index as usize) {
+                    uninited.stoc_sender.send(message).ok();
+                }
+            }
             Netplayer::Unknown => warn!("Try to send message to an unknown position.")
         }
     }
 
-    fn _send(&self, message: Complex<stoc::Message>, target: SendTarget) {
+    pub(crate) fn _send(&self, message: Complex<stoc::Message>, target: SendTarget) {
         match target {
             SendTarget::Single(netplayer) => self._send_netplayer(message, netplayer),
             SendTarget::Except(netplayer) => {
@@ -576,6 +583,7 @@ impl SingleDuel {
                 }
                 self._send(message, SendTarget::AllObserver);
             }
+            SendTarget::Core(coreplayer) => self._send_netplayer(message, self.to_net_player(coreplayer)),
             SendTarget::All => {
                 self._send(message.clone(), SendTarget::AllPlayer);
                 self._send(message,         SendTarget::AllObserver);
@@ -601,10 +609,10 @@ impl SingleDuel {
         let can_player_1_see_unmasked = !message.should_mask(self.to_core_player(PlayerIndex::Player2));
         if is_waiting_for.is_some() { self.last_select_message = Some(message.clone()) }
         let masked_message = if self.configuration.no_mask { message.clone() } else { message.clone_masked() };
-        let message = Complex::from_message(stoc::Message::GameMessage(stoc::GameMessage { message }));
-        let masked_message = Complex::from_message(stoc::Message::GameMessage(stoc::GameMessage { message: masked_message }));
-        // Select message always skip record steps.
-        if is_waiting_for.is_none() {
+        let message = Complex::from_message(stoc::Message::from(message));
+        let masked_message = Complex::from_message(stoc::Message::from(masked_message));
+        // Select messages and messages already sent by handlers are not recorded.
+        if is_waiting_for.is_none() && !matches!(target, SendTarget::None) {
             self.messages.push(message.clone());
             self.masked_messages.push(masked_message.clone());
         }
@@ -619,7 +627,7 @@ impl SingleDuel {
                         let can_see_unmasked = if index > 2 { false } else { can_player_see_unmasked[index as usize] };
                         self._send(if can_see_unmasked { message } else { masked_message }, target)
                     },
-                    Netplayer::Observer(_) => self._send(masked_message, target),
+                    Netplayer::Observer(_) | Netplayer::Undecided(_) => self._send(masked_message, target),
                     Netplayer::Unknown => return,
                 }
             },
@@ -631,6 +639,8 @@ impl SingleDuel {
                 }
                 self._send_game_message(message, masked_message, can_player_see_unmasked, SendTarget::AllObserver);
             },
+            // todo: CorePlayer::All is not correctly processed.
+            SendTarget::Core(coreplayer) => self._send_game_message(message, masked_message, can_player_see_unmasked, SendTarget::Single(self.to_net_player(coreplayer))),
             SendTarget::All => {
                 self._send_game_message(message.clone(), masked_message.clone(), can_player_see_unmasked, SendTarget::AllPlayer);
                 self._send_game_message(message, masked_message, can_player_see_unmasked, SendTarget::AllObserver);
@@ -655,6 +665,13 @@ impl SingleDuel {
         }
     }
 
+    pub fn send_request<Message: Into<ctos::Message>>(&self, message: Message, player: Netplayer) {
+        self.request_sender.send(Request::Message( common::Request { message: message.into(), extra: player } )).ok();
+    }
+
+    pub fn send_request_ex<Message: Into<crate::message::Message>>(&self, message: Message) {
+        self.request_sender.send(Request::MessageEx( common::RequestEx { message: message.into(), extra: SendTarget::All } )).ok();
+    }
 
     pub fn start_timer(&mut self) {
         let sender = self.request_sender.clone();
@@ -667,15 +684,6 @@ impl SingleDuel {
         }));
     }
     
-    pub fn shuffle_deck(&mut self) {
-        let first_attacker = self.first_attack_player.unwrap_or(PlayerIndex::Player1);
-        let shuffle_order = [first_attacker as usize, first_attacker.opponent() as usize];
-        for index in shuffle_order {
-            if let Some(deck) = self.players[index].as_mut().map(|p| &mut p.deck) {
-                self.duel.shuffle_deck(&mut deck.main);
-            }
-        }
-    }
 }
 
 impl Deref for SingleDuel {
@@ -695,8 +703,9 @@ impl AsMut<common::Duel> for SingleDuel {
     fn as_mut(&mut self) -> &mut common::Duel { &mut self.duel }
 }
 
-impl FromRequest<common::Request, State<SingleDuel>, Response> for &mut SingleDuel {
-    fn from_request(bundle: &mut Bundle<common::Request, State<SingleDuel>, Response>) -> Option<Self> {
+impl<Message, Extra, Res> FromRequest<ygopro_handler::extract::Request<Message, Extra>, common::State<SingleDuel>, Res> for &mut SingleDuel
+where Message: Send, Extra: Send, Res: Send {
+    fn from_request(bundle: &mut Bundle<ygopro_handler::extract::Request<Message, Extra>, common::State<SingleDuel>, Res>) -> Option<Self> {
         Some(unsafe { &mut *(&mut bundle.state.duel as *mut SingleDuel) })
     }
 }
@@ -707,9 +716,10 @@ pub struct SingleDuelHost {
 
 impl SingleDuelHost {
     pub fn new(host_info: HostInfo, configuration: Configuration) -> (Self, tokio::task::JoinHandle<()>) {
-        let single_duel = SingleDuel::new(host_info, configuration);
+        let single_duel = SingleDuel::new(host_info.clone(), configuration);
         let request_sender = single_duel.request_sender.clone();
         let handle = single_duel.run().expect("duel already started");
+        request_sender.send(Request::Message(common::Request { message: ctos::Message::CreateGame(ctos::CreateGame { host_info, name: FixedLengthString::allocate(), pass: FixedLengthString::allocate() }), extra: Netplayer::Unknown })).ok();
         (Self { ctos_sender: request_sender }, handle)
     }
 }
@@ -721,12 +731,13 @@ impl RoomProvider<ctos::Message, Complex<stoc::Message>> for SingleDuelHost {
         let ctos_sender = self.ctos_sender.clone();
         let (stoc_sender, stoc_receiver) = mpsc::unbounded_channel();
         let (return_sender, return_receiver) = mpsc::unbounded_channel();
-        ctos_sender.send(Request::Join { stoc_sender }).ok();
+        let (position_sender, position_receiver) = tokio::sync::oneshot::channel();
+        ctos_sender.send(Request::MessageEx(common::RequestEx { message: crate::message::ClientJoin { stoc_sender, position_sender: Some(position_sender) }.into(), extra: SendTarget::None })).ok();
         
         tokio::spawn(async move {
             let mut ctos_stream = Box::pin(client_to_server_stream);
             let mut stoc_stream = UnboundedReceiverStream::new(stoc_receiver);
-            let mut my_position: Netplayer = Netplayer::Unknown;
+            let mut my_position = position_receiver.await.unwrap_or(Netplayer::Unknown);
             loop {
                 tokio::select! {
                     message = ctos_stream.next() => {
@@ -735,6 +746,7 @@ impl RoomProvider<ctos::Message, Complex<stoc::Message>> for SingleDuelHost {
                             Some(message) => message,
                             None => ctos::Message::LeaveGame(ctos::LeaveGame)
                         };
+                        log::debug!("[←C {my_position:?}] {message:?}");
                         ctos_sender.send(Request::Message(common::Request { message, extra: my_position })).ok();
                         if gone { break }
                     }
@@ -745,10 +757,9 @@ impl RoomProvider<ctos::Message, Complex<stoc::Message>> for SingleDuelHost {
                                 stoc::Message::LeaveGame(leave_game) => if leave_game.pos == my_position { break },
                                 _ => ()
                             };
+                            log::debug!("[S→ {my_position:?}] {:?}", message.deref());
                             return_sender.send(message).ok();
-                        } else {
-                            break;
-                        }
+                        } else { break; }
                     }
                 }
             }
@@ -757,40 +768,32 @@ impl RoomProvider<ctos::Message, Complex<stoc::Message>> for SingleDuelHost {
     }
 } 
 
-mod ygopro_handlers {
+pub mod ygopro_handlers {
     use std::io::Cursor;
-    use std::sync::Arc;
-    use std::sync::OnceLock;
 
-    use arc_swap::ArcSwap;
-    use binrw::BinRead;
     use binrw::BinWrite;
     use linkme::distributed_slice;
-
     use log::warn;
+
     use ygopro_data::constants::*;
     use ygopro_data::data::DuelOptions;
-    
-    use ygopro_data::data::QueryData;
-    use ygopro_data::data::UpdateCardInfo;
-    use ygopro_data::message::gm::GameMessage;
     use ygopro_data::message::{ctos, stoc, gm};
     use ygopro_derive::handler;
     use ygopro_derive::register_to;
     use ygopro_handler::Bundle;
-    use ygopro_handler::Processor;
 
     use crate::common;
     use crate::common::Response;
     use crate::common::SendTarget;
-    use crate::common::response_is_meaningful;
     use crate::managers::*;
+    use crate::message as ygopro;
     use crate::single_duel::PlayerIndex;
     use crate::single_duel::SingleDuel;
 
     pub type Request = common::Request;
     pub type State = common::State<SingleDuel>;
     pub type Handler = common::Handler<SingleDuel>;
+    pub type HandlerEx = common::HandlerEx<SingleDuel>;
 
     impl ygopro_handler::FromRequest<Request, State, Response> for &mut common::Request {
         fn from_request(bundle: &mut Bundle<Request, State, Response>) -> Option<Self> {
@@ -800,22 +803,16 @@ mod ygopro_handlers {
 
     #[distributed_slice]
     pub static YGOPRO_HANDLERS: [fn() -> (u8, Handler)];
-    pub static YGOPRO_PROCESSOR: OnceLock<ArcSwap<Processor<u8, Request, State, Response, Handler>>> = OnceLock::new();
-    pub fn reset_processor() -> &'static ArcSwap<Processor<u8, Request, State, Response, Handler>> {
-        YGOPRO_PROCESSOR.get_or_init(|| {
-            let mut processor = Processor::new();
-            for build in YGOPRO_HANDLERS.iter() {
-                let (key, handler) = build();
-                processor.register(key, handler);
-            }
-            processor.resolve();
-            ArcSwap::from(Arc::new(processor))
-        })
-    }
+    #[distributed_slice]
+    pub static YGOPRO_HANDLERS_EX: [fn() -> (u8, HandlerEx)];
+
+    #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
+    pub static NAME: &'static str = module_path!();
 
     #[handler(ctos::Response)]
     #[register_to(YGOPRO_HANDLERS)]
     fn on_response(duel: &mut SingleDuel, player: PlayerIndex, response: &ctos::Response) {
+        if duel.ended { return; }
         duel.client_responses.push(response.clone());
         {
             duel.response_buffer.fill(0);
@@ -831,18 +828,6 @@ mod ygopro_handlers {
             duel.time_elapsed = 0;
             if let Some(duel_player) = duel.get_player_mut_index(player) {
                 duel_player.time_limit = duel_player.time_limit.saturating_sub(time_elapsed);
-            }
-        }
-        if let Some(last_select_message) = &duel.last_select_message && response_is_meaningful(&response.response, last_select_message) {
-            let add_time = duel.configuration.add_time_after_operation;
-            let add_deposit = duel.configuration.add_small_time_deposit_after_operation;
-            let time_limit = duel.host_info.time_limit;
-            if let Some(duel_player) = duel.get_player_mut_index(player) {
-                if duel_player.time_backed > 0 && duel_player.time_limit < time_limit {
-                    duel_player.time_limit = duel_player.time_limit.saturating_add(add_time);
-                    duel_player.time_compensator = duel_player.time_compensator.saturating_add(add_deposit);
-                    duel_player.time_backed = duel_player.time_backed.saturating_sub(add_time);
-                }
             }
         }
         duel.request_sender.send(super::Request::Evolve).ok();
@@ -904,32 +889,29 @@ mod ygopro_handlers {
         duel.first_attack_player = Some(if tp_result.result == CorePlayer::FirstAttackPlayer { player } else { player.opponent() });
         duel.set_player_info(CorePlayer::FirstAttackPlayer,  duel.host_info.start_lp as i32, duel.host_info.start_hand as i32, duel.host_info.draw_count as i32);
         duel.set_player_info(CorePlayer::SecondAttackPlayer, duel.host_info.start_lp as i32, duel.host_info.start_hand as i32, duel.host_info.draw_count as i32);
-        for script in &duel.configuration.preloaded_scripts {
-            if duel.preload_script(script) == 0 {
-                log::debug!("Failed to preload script: {script}");
+        duel.send_request_ex(ygopro::FirstShuffle);
+        duel.send_request_ex(ygopro::DuelInit);
+    }
+
+    #[handler(ygopro::DuelInit)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_duel_init(duel: &mut SingleDuel) {
+        let first_attacker = duel.first_attack_player.unwrap_or(PlayerIndex::Player1);
+        let second_attacker = first_attacker.opponent();
+        for (player, core_player) in [(first_attacker, CorePlayer::FirstAttackPlayer), (second_attacker, CorePlayer::SecondAttackPlayer)] {
+            let Some(deck) = duel.players[player as usize].as_ref() else { return };
+            for &code in deck.deck.main.iter().rev() {
+                duel.new_card(code, core_player, core_player, Location::Deck, 0, Position::FacedownDefense);
+            }
+            for &code in deck.deck.extra.iter().rev() {
+                duel.new_card(code, core_player, core_player, Location::Extra, 0, Position::FacedownDefense);
             }
         }
-        if !(duel.host_info.no_shuffle_deck || duel.configuration.no_init_shuffle_deck) {
-            duel.shuffle_deck();
-        }
-        let mut player1 = match duel.players[0].as_ref() { Some(p) => p, None => return };
-        let mut player2 = match duel.players[1].as_ref() { Some(p) => p, None => return };
-        if (tp_result.result == CorePlayer::FirstAttackPlayer && player == PlayerIndex::Player2)
-            || (tp_result.result == CorePlayer::SecondAttackPlayer && player == PlayerIndex::Player1) {
-            std::mem::swap(&mut player1, &mut player2);
-        }
-        for &code in player1.deck.main.iter().rev() {
-            duel.new_card(code, CorePlayer::FirstAttackPlayer, CorePlayer::FirstAttackPlayer, Location::Deck, 0, Position::FacedownDefense);
     }
-        for &code in player1.deck.extra.iter().rev() {
-            duel.new_card(code, CorePlayer::FirstAttackPlayer, CorePlayer::FirstAttackPlayer, Location::Extra, 0, Position::FacedownDefense);
-        }
-        for &code in player2.deck.main.iter().rev() {
-            duel.new_card(code, CorePlayer::SecondAttackPlayer, CorePlayer::SecondAttackPlayer, Location::Deck, 0, Position::FacedownDefense);
-        }
-        for &code in player2.deck.extra.iter().rev() {
-            duel.new_card(code, CorePlayer::SecondAttackPlayer, CorePlayer::SecondAttackPlayer, Location::Extra, 0, Position::FacedownDefense);
-        }
+
+    #[handler(ygopro::DuelStart)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_duel_start(duel: &mut SingleDuel) {
         let deck1 = duel.query_field_count(CorePlayer::FirstAttackPlayer, Location::Deck) as u16;
         let extra1 = duel.query_field_count(CorePlayer::FirstAttackPlayer, Location::Extra) as u16;
         let deck2 = duel.query_field_count(CorePlayer::SecondAttackPlayer, Location::Deck) as u16;
@@ -946,14 +928,14 @@ mod ygopro_handlers {
             player2_deck_count: deck2,
             player2_extra_count: extra2,
         });
-        duel.send(stoc::GameMessage { message: start(0) }.into(), SendTarget::Single(duel.to_net_player(CorePlayer::FirstAttackPlayer)));
-        duel.send(stoc::GameMessage { message: start(1) }.into(), SendTarget::Single(duel.to_net_player(CorePlayer::SecondAttackPlayer)));
+        duel.send(start(0).into(), SendTarget::Single(duel.to_net_player(CorePlayer::FirstAttackPlayer)));
+        duel.send(start(1).into(), SendTarget::Single(duel.to_net_player(CorePlayer::SecondAttackPlayer)));
         let observer_player_type = match duel.first_attack_player {
             Some(PlayerIndex::Player1) => 0x10,
             Some(PlayerIndex::Player2) => 0x11,
             _ => unreachable!(),
         };
-        duel.send(stoc::GameMessage { message: start(observer_player_type) }.into(), SendTarget::AllObserver);
+        duel.send(start(observer_player_type).into(), SendTarget::AllObserver);
         duel.refresh(CorePlayer::All, Location::Extra, -1, Query::empty());
         let mut options = DuelOptions::empty();
         if duel.host_info.no_shuffle_deck { options.insert(DuelOptions::PseudoShuffle); }
@@ -966,8 +948,6 @@ mod ygopro_handlers {
             let player2 = match player2[0].as_mut() { Some(p) => p, None => return };
             player1.time_limit = time_limit;
             player2.time_limit = time_limit;
-            player1.time_backed = if duel.configuration.max_add_time_each_turn == 0 { if duel.configuration.add_time_after_operation > 0 { time_limit } else { 0 } } else { duel.configuration.max_add_time_each_turn };
-            player2.time_backed = if duel.configuration.max_add_time_each_turn == 0 { if duel.configuration.add_time_after_operation > 0 { time_limit } else { 0 } } else { duel.configuration.max_add_time_each_turn };
             player1.time_compensator = 0;
             player2.time_compensator = 0;
             duel.start_timer();
@@ -1019,23 +999,31 @@ mod ygopro_handlers {
     #[handler(ctos::CreateGame)]
     #[register_to(YGOPRO_HANDLERS)]
     fn on_create_game(duel: &mut SingleDuel, create_game: &ctos::CreateGame) {
-        duel.host_info = create_game.info.clone();
+        duel.host_info = create_game.host_info.clone();
         duel.name = create_game.name.clone();
         duel.pass = create_game.pass.clone();
     }
 
     #[handler(ctos::JoinGame)]
     #[register_to(YGOPRO_HANDLERS)]
-    fn on_join_game(duel: &mut SingleDuel, request: &mut common::Request, join_game: &ctos::JoinGame) -> Result<Vec<stoc::Message>, stoc::Message> {
+    fn on_join_game(duel: &mut SingleDuel, player: Netplayer, request: &mut common::Request, join_game: &ctos::JoinGame) -> Result<Vec<stoc::Message>, stoc::Message> {
         if join_game.version != crate::PRO_VERSION {
             return Err(stoc::ErrorMessage { err: ErrorMessage::VersionError(crate::PRO_VERSION) }.into());
         }
         if !duel.pass.is_empty() && join_game.pass != duel.pass {
             return Err(stoc::ErrorMessage { err: ErrorMessage::JoinError(JoinError::WrongPassword) }.into());
         }
-        if duel.last_init_player.is_none() {
-            return Ok(vec![])
-        }
+        
+        // take that player out
+        let undecided_index = match player {
+            Netplayer::Undecided(index) => index,
+            _ => { warn!("Decided player try to send join_game"); return Err(stoc::ErrorMessage { err: ErrorMessage::JoinError(JoinError::HostRefused) }.into()); }
+        } as usize;
+        let player = match duel.uninit_players.get_mut(undecided_index).map(|c| c.take()) {
+            Some(Some(player)) => player,
+            _ => { warn!("Cannot find uninit player: {:?}", player); return Err(stoc::ErrorMessage { err: ErrorMessage::JoinError(JoinError::HostRefused) }.into()); }
+        };
+        while duel.uninit_players.last().is_none() && !duel.uninit_players.is_empty() { duel.uninit_players.pop(); }
         let mut response_messages = vec![];
 
         // calculate current user position
@@ -1065,7 +1053,6 @@ mod ygopro_handlers {
         }.into());
         
         // broadcast player change
-        let player = duel.last_init_player.take().expect("cannot get init player when join game but we just checked");
         if matches!(pos, Netplayer::Observer(_)) {
             duel.send(stoc::HsWatchChange { watch_count: observer_count }.into(), SendTarget::All);
         } else {
@@ -1095,9 +1082,6 @@ mod ygopro_handlers {
         };
         if observer_count > 0 {
             response_messages.push(stoc::HsWatchChange{ watch_count: observer_count }.into());
-        }
-        if duel.stage > DuelStage::Begin && matches!(pos, Netplayer::Observer(_)) {
-            duel.request_sender.send(crate::single_duel::Request::Soumatou(pos)).ok();
         }
         Ok(response_messages)
     }
@@ -1143,7 +1127,7 @@ mod ygopro_handlers {
             warn!("to_observer requested but player slot is empty");
             return None;
         };
-        let current_netplayer = duel.insert_observer(duel_player.player);
+        let current_netplayer = Netplayer::Observer(SingleDuel::insert_to_last_available_index(&mut duel.observers, duel_player.player) as u8);
         request.extra = current_netplayer;
         let i_am_host = duel.host_player == original_netplayer;
         if i_am_host { duel.host_player = current_netplayer }
@@ -1189,9 +1173,7 @@ mod ygopro_handlers {
                     warn!("LeaveGame requested by unknown observer");
                 } else {
                     duel.observers[index] = None;
-                    while duel.observers.last().is_none() {
-                        duel.observers.pop();
-                    }
+                    while duel.observers.last().is_none() && !duel.observers.is_empty() { duel.observers.pop(); }
                     if duel.stage == DuelStage::Begin {
                         let observer_count = duel.observer_count();
                         duel.send(stoc::HsWatchChange { watch_count: observer_count }.into(), SendTarget::All);
@@ -1213,28 +1195,19 @@ mod ygopro_handlers {
                     if duel.stage != DuelStage::End {
                         let leaving_index = if leaving_netplayer == 0 { PlayerIndex::Player1 } else { PlayerIndex::Player2 };
                         let loser = duel.to_core_player(leaving_index);
-                        duel.win_and_end(loser, WinReason::OpponentLeave);
-                        return true;
+                        duel.send(gm::Win { winner: loser.opponent(), reason: WinReason::OpponentLeave }.into(), SendTarget::All);
+                        duel.send_request_ex(ygopro::DuelEnd { winner: loser.opponent(), reason: WinReason::OpponentLeave });
                     }
                 }
                 duel.players[leaving_netplayer as usize] = None;
             }
+            Netplayer::Undecided(leaving_player) => {
+                if let Some(slot) = duel.uninit_players.get_mut(leaving_player as usize) { slot.take(); }
+                while duel.uninit_players.last().is_none() && !duel.uninit_players.is_empty() { duel.uninit_players.pop(); }
+            }
             Netplayer::Unknown => {}
         }
-        match duel.configuration.terminate_when {
-            SendTarget::Single(netplayer) => {
-                match netplayer {
-                    Netplayer::Player(index) => duel.players.get(index as usize).map_or(true, Option::is_none),
-                    Netplayer::Observer(index) => duel.observers.get(index as usize).map_or(true, Option::is_none),
-                    Netplayer::Unknown => { warn!("set terminate condition to unknown player"); duel.players[0].is_none() && duel.players[1].is_none() && duel.observers.is_empty() },
-                }
-            },
-            SendTarget::Except(_) => { warn!("set terminate condition to not supported except"); duel.players[0].is_none() && duel.players[1].is_none() && duel.observers.is_empty() },
-            SendTarget::All => duel.players[0].is_none() && duel.players[1].is_none() && duel.observers.is_empty(),
-            SendTarget::AllPlayer => duel.players[0].is_none() && duel.players[1].is_none(),
-            SendTarget::AllObserver => duel.observers.is_empty(),
-            SendTarget::None => { warn!("a room is set to terminate in no case. this mean this room will be eternal."); false },
-        }
+        duel.players.iter().all(|player| player.is_none()) && duel.observers.is_empty()
     }
 
     #[handler(ctos::HsStart)]
@@ -1264,6 +1237,9 @@ mod ygopro_handlers {
 
         duel.stage = DuelStage::Finger;
         duel.send(stoc::DuelStart.into(), SendTarget::All);
+        for observer in duel.observers.iter_mut().flatten() {
+            observer.state = Some(ctos::MessageType::LeaveGame);
+        }
 
         let player1_count = stoc::DeckCount {
             mainc_s: deck1_main, sidec_s: deck1_side, extrac_s: deck1_extra,
@@ -1292,12 +1268,13 @@ mod ygopro_handlers {
     #[handler(ctos::Surrender)]
     #[register_to(YGOPRO_HANDLERS)]
     fn on_surrender(duel: &mut SingleDuel, index: PlayerIndex) {
-        if duel.stage != DuelStage::Dueling {
-            warn!("Surrender requested but not in dueling stage");
+        if duel.core.ended {
+            warn!("Surrender requested but duel is already ended.");
             return;
         }
-        let core_surrendering = duel.to_core_player(index);
-        duel.win_and_end(core_surrendering, WinReason::OpponentSurrender);
+        let winner = duel.to_core_player(index).opponent();
+        duel.send(gm::Win { winner, reason: WinReason::OpponentSurrender }.into(), SendTarget::All);
+        duel.send_request_ex(ygopro::DuelEnd { winner, reason: WinReason::OpponentSurrender });
     }
 
     #[handler(ctos::TimeConfirm)]
@@ -1308,18 +1285,13 @@ mod ygopro_handlers {
             warn!("TimeConfirm requested by wrong player");
             return;
         }
-        let ignore_duration = duel.configuration.ignore_small_time_under_this_duration;
         let time_elapsed = duel.time_elapsed;
         let Some(duel_player) = duel.get_player_mut_index(index) else {
             warn!("TimeConfirm requested but player slot is empty");
             return;
         };
         duel_player.state = Some(ctos::MessageType::Response);
-        if time_elapsed < ignore_duration && time_elapsed <= duel_player.time_compensator {
-            duel_player.time_compensator -= time_elapsed;
-        } else {
-            duel_player.time_limit = duel_player.time_limit.saturating_sub(time_elapsed);
-        }
+        duel_player.time_limit = duel_player.time_limit.saturating_sub(time_elapsed);
         duel.time_elapsed = 0;
     }
 
@@ -1341,8 +1313,12 @@ mod ygopro_handlers {
 
     #[handler(ctos::PlayerInfo)]
     #[register_to(YGOPRO_HANDLERS)]
-    fn on_player_info(duel: &mut SingleDuel, player_info: &ctos::PlayerInfo) {
-        if let Some(player) = duel.last_init_player.as_mut() {
+    fn on_player_info(duel: &mut SingleDuel, player: Netplayer, player_info: &ctos::PlayerInfo) {
+        let index = match player {
+            Netplayer::Undecided(index) => index,
+            _ => { warn!("A decided player {:?} sent player info.", player); return } 
+        };
+        if let Some(Some(player)) = duel.uninit_players.get_mut(index as usize) {
             player.name = player_info.name.clone();
         } else {
             warn!("We receive a player_info, but no user is waiiting init.");
@@ -1418,131 +1394,132 @@ mod ygopro_handlers {
     #[handler(ctos::HsKick)]
     #[register_to(YGOPRO_HANDLERS)]
     fn on_hs_kick(duel: &mut SingleDuel, kicker: Netplayer, kick: &ctos::HsKick) {
-        if kicker != duel.host_player {
-            warn!("HsKick requested by non-host");
-            return;
-        }
-        if duel.stage != DuelStage::Begin {
-            warn!("HsKick requested outside Begin stage");
-            return;
-        }
+        if kicker != duel.host_player { warn!("HsKick requested by non-host"); return; }
+        if duel.stage != DuelStage::Begin { warn!("HsKick requested outside Begin stage"); return; }
         let Netplayer::Player(target) = kick.pos else {
             warn!("HsKick requested to kick non-player");
             return;
         };
-        if kicker == kick.pos {
-            warn!("HsKick: cannot kick self");
-            return;
-        }
-        if duel.players[target as usize].is_none() {
-            warn!("HsKick: target slot empty");
-            return;
-        }
-        duel.players[target as usize] = None;
+        if kicker == kick.pos { warn!("HsKick: cannot kick self"); return; }
+        if duel.players[target as usize].is_none() { warn!("HsKick: target slot empty"); return; }
+        duel.send(stoc::LeaveGame { pos: kick.pos }.into(), kick.pos.into());
+        duel.players[target as usize].take();
         duel.send(stoc::HsPlayerChange {
             status: PlayerChange::new()
                 .with_state(PlayerChangeState::Leave)
                 .with_player(kick.pos)
-        }.into(), SendTarget::All);
+        }.into(), SendTarget::Except(kick.pos));
     }
 
-    #[handler(ctos::RequestField)]
-    #[register_to(YGOPRO_HANDLERS)]
-    fn on_request_field(duel: &mut SingleDuel, player: PlayerIndex) -> Vec<stoc::Message> {
-        let mut messages = vec![];
-        messages.push(stoc::DuelStart.into());
-
-        let player_type: u8 = duel.to_core_player(player) as u8;
-        let start_lp = duel.host_info.start_lp as i32;
-        messages.push(stoc::GameMessage {
-            message: gm::Message::Start(gm::Start {
-                player_type,
-                rule: duel.host_info.duel_rule,
-                player1_lp: start_lp,
-                player2_lp: start_lp,
-                player1_deck_count: 0,
-                player1_extra_count: 0,
-                player2_deck_count: 0,
-                player2_extra_count: 0,
-            })
-        }.into());
-
-        messages.push(stoc::GameMessage { message: gm::Message::NewTurn(gm::NewTurn { player: CorePlayer::FirstAttackPlayer }) }.into());
-        if duel.turn_player == CorePlayer::SecondAttackPlayer {
-            messages.push(stoc::GameMessage { message: gm::Message::NewTurn(gm::NewTurn { player: CorePlayer::SecondAttackPlayer }) }.into());
+    #[handler(ygopro::ClientJoin)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_client_join(duel: &mut SingleDuel, join: &mut ygopro::ClientJoin) {
+        if duel.stage > DuelStage::Begin { return }
+        if let Some(oneshot) = join.position_sender.take() {
+            let player = common::DuelPlayer::new(join.stoc_sender.clone());
+            let undecided_index = SingleDuel::insert_to_last_available_index(&mut duel.uninit_players, player);
+            oneshot.send(Netplayer::Undecided(undecided_index as u8)).ok();
+        } else {
+            warn!("ClientJoin try to send the position, but find it already taken.")
         }
+    }
 
-        messages.push(stoc::GameMessage {
-            message: gm::Message::NewPhase(gm::NewPhase {
-                phase: duel.phase,
-            })
-        }.into());
+    #[handler(ygopro::ClientJoin, priority = 250)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_client_join_final(join: &mut ygopro::ClientJoin) {
+        if join.position_sender.is_some() {
+            let error_message: stoc::Message = stoc::ErrorMessage { err: ErrorMessage::JoinError(JoinError::HostRefused) }.into();
+            join.stoc_sender.send(ygopro_data::complex::Complex::from_message(error_message)).ok();
+        }
+    }
 
-        let len = duel.duel.query_field_info(&mut duel.core_request_buffer);
-        let mut cursor = Cursor::new(&duel.core_request_buffer[..len as usize]);
-        let message = gm::Message::read_le(&mut cursor).unwrap();
-        messages.push(stoc::GameMessage { message }.into());
-
-
-        let core_player = duel.to_core_player(player);
-        let opponent = core_player.opponent();
-        for location in [Location::MZone, Location::SZone, Location::Hand, Location::Grave, Location::Extra, Location::Removed] {
-            for mut gm_message in duel.duel.refresh_location(&mut duel.core_request_buffer, opponent, location, Query::all()) {
-                if !duel.configuration.no_mask { gm_message.mask(); }
-                messages.push(stoc::GameMessage { message: gm_message }.into());
-            }
-            for gm_message in duel.duel.refresh_location(&mut duel.core_request_buffer, core_player, location, Query::all()) {
-                messages.push(stoc::GameMessage { message: gm_message }.into());
+   #[handler(ygopro::FirstShuffle)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_first_shuffle(duel: &mut SingleDuel) {
+        if duel.host_info.no_shuffle_deck { return }
+        let first_attacker = duel.first_attack_player.unwrap_or(PlayerIndex::Player1);
+        let shuffle_order = [first_attacker as usize, first_attacker.opponent() as usize];
+        for index in shuffle_order {
+            if let Some(deck) = duel.players[index].as_mut().map(|p| &mut p.deck) {
+                duel.duel.shuffle_deck(&mut deck.main);
             }
         }
+    }
 
-        if duel.deck_reversed {
-            messages.push(stoc::GameMessage { message: gm::Message::ReverseDeck(gm::ReverseDeck) }.into());
-        }
+    #[handler(ygopro::GenerateReplay)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_generate_replay(duel: &mut SingleDuel) -> Option<stoc::Message> {
+        let mut replay = duel.create_replay_without_data()?;
+        replay.body.datas = duel.client_responses.clone().into_iter().map(|r| r.response.into()).collect();
+        Some(stoc::Replay { replay: Box::new(replay) }.into())
+    }
 
-        for player in [CorePlayer::FirstAttackPlayer, CorePlayer::SecondAttackPlayer] {
-            let message = duel.duel.query_location_cards(&mut duel.core_request_buffer, player, Location::Deck, Query::Code | Query::Position);
-            let message = match message { gm::Message::UpdateData(update) => update, _ => continue };
-            let data = match message.data.last() { Some(UpdateCardInfo::Data(data)) => data, _ => continue };
-            let code = match &data[0] { QueryData::Code(code) => *code as u32, _ => continue };
-            let position = match &data[1] { QueryData::Position(location) => location.position, _ => continue };
-            let is_faceup = !position.is_face_down();
-            if !duel.deck_reversed && !is_faceup { continue; }
-            let message = gm::DeckTop {
-                player,
-                sequence: 0,
-                code: gm::CardCode::new().with_id(code).with_is_public(is_faceup),
-            }.into();
-            messages.push(stoc::GameMessage { message }.into());
-        }
+    #[handler(ygopro::DuelEnd)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_duel_end(duel: &mut SingleDuel, end: &ygopro::DuelEnd) {
+        duel.core.end();
+        duel.duel_count += 1;
+        duel.duel_winner.push(duel.to_player_index(end.winner));
+        if let Some(task) = duel.timer_task.as_mut() {
+            task.abort();
+        };
+    }
 
-        for player_index in [PlayerIndex::Player1, PlayerIndex::Player2] {
-            let base = duel.get_player_index(player_index).map_or(0, |player| player.time_limit);
-            let left_time = if Some(player_index) == duel.last_response {
-                base.saturating_sub(duel.time_elapsed)
-            } else {
-                base
-            };
-            messages.push(stoc::TimeLimit {
-                player: duel.to_core_player(player_index),
-                left_time,
-            }.into());
+    #[handler(ygopro::JudgeContinueMatch)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_judge_continue_match(duel: &mut SingleDuel) -> &'static str {
+        let end_count = if duel.host_info.mode == Mode::Match { 3 } else { 1 };
+        let end_win_count = (end_count + 1) / 2;
+        let mut player_wins = [0, 0];
+        for winner in &duel.duel_winner {
+            if let Some(winner) = winner { player_wins[*winner as usize] += 1 }
         }
+        let should_match_end = duel.duel_winner.len() >= end_count || player_wins[0] >= end_win_count || player_wins[1] >= end_win_count;
+        if should_match_end { "terminate" } else { "continue" }
+    }
 
-        messages.push(stoc::FieldFinish.into());
-        if let Some(message) = &duel.last_select_message && duel.last_response.unwrap_or(duel.to_player_index(CorePlayer::FirstAttackPlayer).unwrap_or(PlayerIndex::Player1)) == player {
-           messages.push(stoc::GameMessage { message: message.clone() }.into());
+    #[handler(ygopro::JudgeContinueMatch, priority = 250)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_judge_continue_match_kill(duel: &mut SingleDuel) -> &'static str {
+        if duel.match_kill_card_code > 0 { "terminate" } else { "continue" }
+    }
+
+    #[handler(ygopro::JudgeContinueMatch, priority = 251)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_judge_continue_somebody_leave(duel: &mut SingleDuel) -> &'static str {
+        if duel.players.iter().any(|p| p.is_none()) { "terminate" } else { "continue" }
+    }
+
+    #[handler(ygopro::MatchEnd)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_match_end(duel: &mut SingleDuel) {
+        duel.send(stoc::DuelEnd.into(), SendTarget::All);
+    }
+
+    #[handler(ygopro::RecreateDuel)]
+    #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+    fn on_recreate_duel(duel: &mut SingleDuel) {
+        for player in &mut duel.players {
+            if let Some(player) = player.as_mut() { 
+                player.state = Some(ctos::MessageType::UpdateDeck);
+                player.ready = false;
+            }
         }
-        messages
+        duel.first_attack_player = None;
+        let current_decider = duel.first_attack_decider.unwrap_or(PlayerIndex::Player1);
+        let last_winner = duel.duel_winner.last().and_then(|winner| *winner);
+        duel.first_attack_decider = Some(last_winner.map(PlayerIndex::opponent).unwrap_or(current_decider.opponent()));
+        duel.stage = DuelStage::Siding;
+        duel.send(stoc::ChangeSide.into(), SendTarget::AllPlayer);
+        duel.send(stoc::WaitingSide.into(), SendTarget::AllObserver);
+        duel.core = ygopro_core_wrapper::Duel::new(duel.configuration.seed(duel.duel_count));
+        duel.client_responses.clear();
     }
 }
 
-mod ygocore_handlers {
+pub mod ygocore_handlers {
     use std::io::Cursor;
-    use std::sync::Arc;
-    use std::sync::OnceLock;
 
-    use arc_swap::ArcSwap;
     use binrw::BinRead;
     use linkme::distributed_slice;
     use log::warn;
@@ -1554,11 +1531,12 @@ mod ygocore_handlers {
     use ygopro_handler::Bundle;
     use ygopro_handler::FromRequest;
     use ygopro_handler::IntoResponse;
-    use ygopro_handler::Processor;
+    use ygopro_derive::before;
     use ygopro_derive::handler;
     use ygopro_derive::register_to;
 
     use crate::common;
+    use crate::message as ygopro;
     use crate::common::SendTarget;
     use crate::single_duel::SingleDuel;
 
@@ -1577,10 +1555,29 @@ mod ygocore_handlers {
         }
     }
 
-    impl FromRequest<Request, State, Response> for &mut SingleDuel {
-        fn from_request(bundle: &mut Bundle<Request, State, Response>) -> Option<Self> {
-            Some(unsafe { &mut *(&mut bundle.state.duel as *mut SingleDuel) })
+    impl std::ops::Mul for Response {
+        type Output = Response;
+
+        fn mul(self, rhs: Self) -> Self::Output { 
+            let target = match (self.target, rhs.target) {
+                (SendTarget::All, _) => rhs.target,
+                (_, SendTarget::All) => self.target,
+                (_, _) => rhs.target
+            };
+            let refresh = (
+                self.refresh.0 * rhs.refresh.0, 
+                self.refresh.1 | rhs.refresh.1, 
+                std::cmp::max(self.refresh.2, rhs.refresh.2),
+                self.refresh.3 | rhs.refresh.3
+            );
+            Response { target, refresh }
         }
+    }
+
+    impl<'a> std::ops::Not for &'a Response {
+        type Output = bool;
+
+        fn not(self) -> bool { false }
     }
 
     impl FromRequest<Request, State, Response> for &SingleDuel {
@@ -1588,7 +1585,6 @@ mod ygocore_handlers {
             Some(unsafe { &*(&bundle.state.duel as *const SingleDuel) })
         }
     }
-
 
     impl IntoResponse<Response> for () {
         fn into_response(self) -> Response {
@@ -1602,6 +1598,11 @@ mod ygocore_handlers {
         }
     }
 
+    impl IntoResponse<Response> for CorePlayer {
+        fn into_response(self) -> Response {
+            Response { target: SendTarget::Core(self), refresh: (CorePlayer::None, Location::empty(), -1, Query::empty()) }
+        } 
+    }
 
     impl IntoResponse<Response> for SendTarget {
         fn into_response(self) -> Response {
@@ -1629,22 +1630,14 @@ mod ygocore_handlers {
 
     #[distributed_slice]
     pub static YGOCORE_HANDLERS: [fn() -> (u8, Handler)];
-    pub static YGOCORE_PROCESSOR: OnceLock<ArcSwap<Processor<u8, Request, common::State<SingleDuel>, Response, Handler>>> = OnceLock::new();
-    pub fn reset_processor() -> &'static ArcSwap<Processor<u8, Request, common::State<SingleDuel>, Response, Handler>> {
-        YGOCORE_PROCESSOR.get_or_init(|| {
-            let mut processor = Processor::new();
-            for build in YGOCORE_HANDLERS.iter() {
-                let (key, handler) = build();
-                processor.register(key, handler);
-            }
-            processor.resolve();
-            ArcSwap::from(Arc::new(processor))
-        })
-    }
+
+    #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
+    pub static NAME: &'static str = module_path!();
 
     /// process input messages, until waiting for user input or duel end.
     /// named `process` in original ygopro.
     pub fn evolve(duel: &mut SingleDuel) -> Vec<gm::Message> {
+        if duel.ended { return vec![]; }
         let mut messages = vec![];
         loop {
             let result = duel.process();
@@ -1674,13 +1667,13 @@ mod ygocore_handlers {
         let index = match duel.to_player_index(player) {
             Some(player) => player,
             None => {
-                warn!("try to set waiting to a non-sense plyaer: {:?}", player);
+                warn!("try to set waiting to a non-sense player: {:?}", player);
                 return None
             }
         };
         duel.last_response = Some(index);
         duel.send(
-            stoc::Message::GameMessage(stoc::GameMessage { message: gm::Message::Waiting(gm::Waiting) }),
+            gm::Waiting.into(),
             SendTarget::Single(index.opponent().into()),
         );
         if duel.host_info.time_limit > 0 {
@@ -1697,136 +1690,53 @@ mod ygocore_handlers {
         Some(())
     }
 
+    #[before(ygopro_handler::All)]
+    #[register_to(YGOCORE_HANDLERS)]
+    fn on_all_message(message: &gm::Message) -> SendTarget {
+        message.waiting_for().map(SendTarget::Core).unwrap_or(SendTarget::All)
+    }
+
     #[handler(gm::Retry)]
     #[register_to(YGOCORE_HANDLERS)]
-    fn on_retry(duel: &mut SingleDuel, _message: &gm::Retry) -> Netplayer {
-        let netplayer = match duel.last_response {
-            Some(player_index) => duel.to_net_player(duel.to_core_player(player_index)),
-            None => Netplayer::Unknown,
-        };
-        netplayer
+    fn on_retry(duel: &mut SingleDuel, _message: &gm::Retry) -> SendTarget {
+        duel.last_response.map(|player_index| SendTarget::Core(duel.to_core_player(player_index))).unwrap_or(SendTarget::None)
     }
 
     #[handler(gm::Hint)]
     #[register_to(YGOCORE_HANDLERS)]
     fn on_hint(duel: &mut SingleDuel, message: &gm::Hint) -> SendTarget {
         match message._type {
-            Hint::Event | Hint::Message | Hint::SelectMessage | Hint::Effect => {
-                SendTarget::Single(duel.to_net_player(message.player))
-            }
-            Hint::OpponentSelected | Hint::Race | Hint::Attribute | Hint::Code | Hint::Number | Hint::Zone => {
-                SendTarget::Except(duel.to_net_player(message.player))
-            }
+            Hint::Event | Hint::Message | Hint::SelectMessage | Hint::Effect => SendTarget::Core(message.player),
+            Hint::OpponentSelected | Hint::Race | Hint::Attribute | Hint::Code | Hint::Number | Hint::Zone =>
+                SendTarget::Except(duel.to_net_player(message.player)),
             Hint::Card => SendTarget::All,
         }
     }
 
     #[handler(gm::Win)]
     #[register_to(YGOCORE_HANDLERS)]
-    fn on_win(duel: &mut SingleDuel, message: &gm::Win) -> SendTarget {
-        // we need send win message before the duel end.
-        duel.win_and_end(message.winner.opponent(), message.reason);
-        SendTarget::None
+    fn on_win(duel: &mut SingleDuel, message: &gm::Win) {
+        duel.send_request_ex(ygopro::DuelEnd { winner: message.winner, reason: message.reason });
     }
 
     #[handler(gm::SelectBattleCommand)]
     #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_battle_command(duel: &mut SingleDuel, message: &gm::SelectBattleCommand) -> Netplayer {
-        duel.refresh(CorePlayer::All, Location::MZone | Location::SZone | Location::Hand, -1, Query::empty());
-        duel.to_net_player(message.selecting_player)
+    fn on_select_battle_command(_message: &gm::SelectBattleCommand) -> (CorePlayer, Location, i8, Query) {
+        (CorePlayer::All, Location::MZone | Location::SZone | Location::Hand, -1, Query::empty())
     }
 
     #[handler(gm::SelectIdleCommand)]
     #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_idle_command(duel: &mut SingleDuel, message: &gm::SelectIdleCommand) -> Netplayer {
-        duel.refresh(CorePlayer::All, Location::MZone | Location::SZone | Location::Hand, -1, Query::empty());
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectEffectYesNo)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_effect_yes_no(duel: &mut SingleDuel, message: &gm::SelectEffectYesNo) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectYesNo)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_yes_no(duel: &mut SingleDuel, message: &gm::SelectYesNo) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectOption)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_option(duel: &mut SingleDuel, message: &gm::SelectOption) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectCard)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_card(duel: &mut SingleDuel, message: &gm::SelectCard) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectChain)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_chain(duel: &mut SingleDuel, message: &gm::SelectChain) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectPlace)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_place(duel: &mut SingleDuel, message: &gm::SelectPlace) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectPosition)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_position(duel: &mut SingleDuel, message: &gm::SelectPosition) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectTribute)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_tribute(duel: &mut SingleDuel, message: &gm::SelectTribute) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectCounter)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_counter(duel: &mut SingleDuel, message: &gm::SelectCounter) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectSum)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_sum(duel: &mut SingleDuel, message: &gm::SelectSum) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SelectDisableField)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_disable_field(duel: &mut SingleDuel, message: &gm::SelectDisableField) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
-    }
-
-    #[handler(gm::SortCard)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_sort_card(duel: &mut SingleDuel, message: &gm::SortCard) -> Netplayer {
-        duel.to_net_player(message.player)
-    }
-
-    #[handler(gm::SelectUnselectCard)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_select_unselect_card(duel: &mut SingleDuel, message: &gm::SelectUnselectCard) -> Netplayer {
-        duel.to_net_player(message.selecting_player)
+    fn on_select_idle_command(_message: &gm::SelectIdleCommand) -> (CorePlayer, Location, i8, Query) {
+        (CorePlayer::All, Location::MZone | Location::SZone | Location::Hand, -1, Query::empty())
     }
 
     #[handler(gm::ConfirmCards)]
     #[register_to(YGOCORE_HANDLERS)]
-    fn on_confirm_cards(duel: &mut SingleDuel, message: &gm::ConfirmCards) -> SendTarget {
+    fn on_confirm_cards(message: &gm::ConfirmCards) -> SendTarget {
         let is_deck = message.cards.first().map_or(false, |c| c.location == Location::Deck);
         if is_deck {
-            SendTarget::Single(duel.to_net_player(message.player))
+            SendTarget::Core(message.player)
         } else {
             SendTarget::All
         }
@@ -1850,12 +1760,6 @@ mod ygocore_handlers {
         (CorePlayer::All, message.location, -1, Query::from_bits_retain(0x181fff))
     }
 
-    #[handler(gm::ReverseDeck)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_reverse_deck(duel: &mut SingleDuel, _message: &gm::ReverseDeck) {
-        duel.deck_reversed = !duel.deck_reversed;
-    }
-
     #[handler(gm::ShuffleExtra)]
     #[register_to(YGOCORE_HANDLERS)]
     fn on_shuffle_extra(message: &gm::ShuffleExtra) -> (CorePlayer, Location) {
@@ -1864,38 +1768,33 @@ mod ygocore_handlers {
 
     #[handler(gm::NewTurn)]
     #[register_to(YGOCORE_HANDLERS)]
-    fn on_new_turn(duel: &mut SingleDuel, message: &gm::NewTurn) -> (CorePlayer, Location) {
-        duel.turn_player = message.player;
+    fn on_new_turn(duel: &mut SingleDuel) -> (CorePlayer, Location) {
         let time_limit = duel.host_info.time_limit;
-        let time_backed = if duel.configuration.max_add_time_each_turn == 0 { if duel.configuration.add_time_after_operation > 0 { time_limit } else { 0 } } else { duel.configuration.max_add_time_each_turn };
         for duel_player in duel.players.iter_mut().flatten() {
             duel_player.time_limit = time_limit;
-            duel_player.time_compensator = 0;
-            duel_player.time_backed = time_backed;
         }
         (CorePlayer::All, Location::MZone | Location::SZone | Location::Hand)
     }
 
     #[handler(gm::NewPhase)]
     #[register_to(YGOCORE_HANDLERS)]
-    fn on_new_phase(duel: &mut SingleDuel, message: &gm::NewPhase) -> (CorePlayer, Location) {
-        duel.phase = message.phase;
+    fn on_new_phase() -> (CorePlayer, Location) {
         (CorePlayer::All, Location::MZone | Location::SZone | Location::Hand)
     }
 
     #[handler(gm::Move)]
     #[register_to(YGOCORE_HANDLERS)]
     fn on_move(message: &gm::Move) -> (CorePlayer, Location, i8) {
-        let cc = message.current.controller;
-        let cl = message.current.location;
-        let cs = message.current.sequence;
-        let pc = message.previous.controller;
-        let pl = message.previous.location;
-        if cl != Location::empty()
-            && !cl.intersects(Location::Overlay)
-            && (cl != pl || cc != pc)
+        let current_controller = message.current.controller;
+        let current_location = message.current.location;
+        let current_sequence = message.current.sequence;
+        let previous_controller = message.previous.controller;
+        let previous_location = message.previous.location;
+        if current_location != Location::empty()
+            && !current_location.intersects(Location::Overlay)
+            && (current_location != previous_location || current_controller != previous_controller)
         {
-            (cc, cl, cs as i8)
+            (current_controller, current_location, current_sequence as i8)
         } else {
             (CorePlayer::None, Location::empty(), -1)
         }
@@ -1963,6 +1862,12 @@ mod ygocore_handlers {
         (CorePlayer::All, Location::MZone | Location::SZone | Location::Hand)
     }
 
+    #[handler(gm::CardSelected)]
+    #[register_to(YGOCORE_HANDLERS)]
+    fn on_card_selected() -> SendTarget {
+        SendTarget::None
+    }
+
     #[handler(gm::DamageStepStart)]
     #[register_to(YGOCORE_HANDLERS)]
     fn on_damage_step_start() -> (CorePlayer, Location) {
@@ -1977,43 +1882,18 @@ mod ygocore_handlers {
 
     #[handler(gm::MissedEffect)]
     #[register_to(YGOCORE_HANDLERS)]
-    fn on_missed_effect(duel: &mut SingleDuel, message: &gm::MissedEffect) -> Netplayer {
-        duel.to_net_player(message.location.controller)
-    }
-
-    #[handler(gm::RockPaperScissors)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_rock_paper_scissors(duel: &mut SingleDuel, message: &gm::RockPaperScissors) -> Netplayer {
-        duel.to_net_player(message.player)
-    }
-
-    #[handler(gm::AnnounceRace)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_announce_race(duel: &mut SingleDuel, message: &gm::AnnounceRace) -> Netplayer {
-        duel.to_net_player(message.player)
-    }
-
-    #[handler(gm::AnnounceAttribute)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_announce_attribute(duel: &mut SingleDuel, message: &gm::AnnounceAttribute) -> Netplayer {
-        duel.to_net_player(message.player)
-    }
-
-    #[handler(gm::AnnounceCard)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_announce_card(duel: &mut SingleDuel, message: &gm::AnnounceCard) -> Netplayer {
-        duel.to_net_player(message.player)
-    }
-
-    #[handler(gm::AnnounceNumber)]
-    #[register_to(YGOCORE_HANDLERS)]
-    fn on_announce_number(duel: &mut SingleDuel, message: &gm::AnnounceNumber) -> Netplayer {
-        duel.to_net_player(message.player)
+    fn on_missed_effect(message: &gm::MissedEffect) -> CorePlayer {
+        message.location.controller
     }
 
     #[handler(gm::MatchKill)]
     #[register_to(YGOCORE_HANDLERS)]
-    fn on_match_kill(duel: &mut SingleDuel, message: &gm::MatchKill) {
-        duel.match_kill_card_code = message.card_code as i32;
+    fn on_match_kill(duel: &mut SingleDuel, message: &gm::MatchKill) -> SendTarget {
+        if duel.host_info.mode == Mode::Match {
+            duel.match_kill_card_code = message.card_code as i32;
+            SendTarget::All
+        } else {
+            SendTarget::None
+        }
     }
 }

@@ -90,8 +90,8 @@ impl RoomFactory for SingleDuelFactory {
         async move {
             let seed_sequence = replay.header.seed_sequence;
             let mut configuration = Configuration::default();
-            configuration.no_init_shuffle_deck = true;
             configuration.no_mask = true;
+            configuration.enable_plugin(ygopro::plugin::no_init_shuffle_deck::NAME);
             configuration.seed_generator = Some(Box::new(move |_duel_count: u8| DuelSeed::Complicated(seed_sequence)));
             let (duel, _handle) = SingleDuel::new(replay.host_info(), configuration);
             drive_replay(duel, replay).await
