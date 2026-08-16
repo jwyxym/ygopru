@@ -39,5 +39,4 @@ card = [
     "ygopro-handler/card",
 ]
 zip = ["ygopro/zip"]
-ygopro3_support = ["ygopro/ygopro3_support", "zip"]
 ygomobile_support = ["ygopro/ygomobile_support", "zip", "dep:jni"]

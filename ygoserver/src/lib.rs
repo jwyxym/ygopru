@@ -39,7 +39,6 @@ use ygopro_handler::RoomProvider;
 use ygopro::managers;
 use ygopro::ypk;
 use ygopro::init_core;
-use ygopro::single_duel;
 use ygopro::single_duel::SingleDuelHost;
 
 const START_ALREADY_RUNNING: i32 = -1;
@@ -62,11 +61,7 @@ struct ServerArguments {
     host_info: HostInfo,
     replay_mode: ReplayMode,
     seeds: Vec<[u32; SEED_COUNT]>,
-    base_path: String,
-    #[cfg_attr(not(feature = "ygopro3_support"), allow(dead_code))]
-    i18n: String,
-    #[cfg_attr(not(feature = "ygopro3_support"), allow(dead_code))]
-    packs: String,
+    base_path: String
 }
 
 #[unsafe(no_mangle)]
@@ -183,9 +178,9 @@ async fn run_tcp_server(server_arguments: ServerArguments, mut shutdown_receiver
     start_result_sender.send(Ok(port)).ok();
     log::info!("Listening on port {port}");
 
-    let mut configuration = managers::config_manager::get_duel_configuration();
+    let mut configuration = ygopro::Configuration::default();
 	configuration.seed_generator = Some(Box::new(seed_generator));
-    configuration.replay_mode = server_arguments.replay_mode;
+    configuration.enable_plugin_with_configuration(ygopro::plugin::replay::NAME, ygopro::plugin::replay::Configuration { mode: server_arguments.replay_mode });
     let (mut duel, duel_handle) = SingleDuelHost::new(server_arguments.host_info, configuration);
     let mut client_tasks = Vec::new();
 
@@ -280,9 +275,7 @@ fn parse_server_arguments(arguments: &[String]) -> Result<ServerArguments, i32> 
             host_info: HostInfo::default(),
             replay_mode: ReplayMode::empty(),
             seeds: Vec::new(),
-            base_path: String::from("./"),
-            i18n: String::from("zh-CN"),
-            packs: String::new(),
+            base_path: String::from("./")
         });
     }
     if arguments.len() == 1 {
@@ -292,9 +285,7 @@ fn parse_server_arguments(arguments: &[String]) -> Result<ServerArguments, i32> 
             host_info: HostInfo::default(),
             replay_mode: ReplayMode::empty(),
             seeds: Vec::new(),
-            base_path: String::from("./"),
-            i18n: String::from("zh-CN"),
-            packs: String::new(),
+            base_path: String::from("./")
         });
     }
     if arguments.len() < 12 {
@@ -318,8 +309,6 @@ fn parse_server_arguments(arguments: &[String]) -> Result<ServerArguments, i32> 
     };
     let replay_mode: ReplayMode = ReplayMode::from_bits_retain(arguments[11].parse::<u32>().unwrap_or(0));
     let base_path = arguments.get(12).cloned().unwrap_or_else(|| String::from("./"));
-    let i18n = arguments.get(13).cloned().unwrap_or_else(|| String::from("zh-CN"));
-    let packs = arguments.get(14).cloned().unwrap_or_default();
     let seeds = arguments
         .iter()
         .skip(15)
@@ -331,9 +320,7 @@ fn parse_server_arguments(arguments: &[String]) -> Result<ServerArguments, i32> 
         host_info,
         replay_mode,
         seeds,
-        base_path,
-        i18n,
-        packs
+        base_path
     })
 }
 
@@ -343,16 +330,11 @@ fn init(server_arguments: &ServerArguments) {
     managers::data_manager::init();
     managers::deck_manager::init();
     init_core();
-    single_duel::init();
 }
 
 fn configure_resource_paths(server_arguments: &ServerArguments) {
     let mut entries: HashMap<String, String> = HashMap::new();
     entries.insert("path".to_string(), server_arguments.base_path.clone());
-    #[cfg(feature = "ygopro3_support")] {
-        entries.insert("i18n".to_string(), server_arguments.i18n.clone());
-        entries.insert("pack_names".to_string(), server_arguments.packs.clone());
-    }
 	let config = managers::config_manager::ConfigManager::from(entries);
     managers::config_manager::set_global(config);
 }

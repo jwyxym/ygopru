@@ -17,10 +17,7 @@ pub mod archive_manager {
 
     pub fn init() {
         let mut expansion_archives: Vec<ExpansionArchive> = Vec::new();
-        #[cfg(all(
-            not(feature = "ygopro3_support"),
-            not(feature = "ygomobile_support"),
-        ))] {
+        #[cfg(not(feature = "ygomobile_support"))] {
             let entries = if let Ok(entries) = fs::read_dir("./expansions") {
                 entries 
             } else {
@@ -43,41 +40,6 @@ pub mod archive_manager {
                         archive_reader: Mutex::new(archive_reader),
                     }),
                     Err(error) => log::debug!("Failed to open archive {}: {}", path.display(), error),
-                }
-            }
-        }
-
-        #[cfg(feature = "ygopro3_support")] {
-            let path: String = crate::managers::config_manager::load()
-                .as_ref()
-                .and_then(|config_manager| config_manager.get("path"))
-                .unwrap_or("./")
-                .to_string();
-            let path: &Path = Path::new(&path);
-            let expansions_path: PathBuf = path.join("expansions");
-            let pack_names: Vec<String> = crate::managers::config_manager::load()
-                .as_ref()
-                .and_then(|config_manager| config_manager.get("pack_names"))
-                .map(|pack_names| {
-                    pack_names
-                        .split('/')
-                        .map(|pack_name| pack_name.trim().to_string())
-                        .filter(|pack_name| !pack_name.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default();
-            for pack_name in &pack_names {
-                let pack_path: PathBuf = expansions_path.join(pack_name);
-                let Ok(file) = fs::File::open(&pack_path) else {
-                    log::debug!("Failed to open archive {}", pack_name);
-                    continue;
-                };
-                match ZipArchive::new(file) {
-                    Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
-                        _path: pack_path,
-                        archive_reader: Mutex::new(archive_reader),
-                    }),
-                    Err(error) => log::debug!("Failed to open archive {}: {}", pack_name, error),
                 }
             }
         }
@@ -128,7 +90,6 @@ pub mod archive_manager {
         GLOBAL_ARCHIVES.store(Some(Arc::new(expansion_archives)));
     }
 
-    #[cfg(not(feature = "ygopro3_support"))]
     fn is_expansion_archive(path: &Path) -> bool {
         path.extension()
             .and_then(|extension| extension.to_str())

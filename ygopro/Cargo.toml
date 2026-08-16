@@ -40,7 +40,6 @@ card = [
     "ygopro-data/card",
     "ygopro-handler/card",
 ]
-ygopro3_support = []
 ygomobile_support = []
 
 [profile.release]
