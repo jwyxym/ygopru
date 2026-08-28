@@ -175,6 +175,8 @@ pub struct SingleDuel {
     first_attack_decider: Option<PlayerIndex>,
     pub last_response: Option<PlayerIndex>,
     match_kill_card_code: i32,
+    duel_end_pending: bool,
+    match_end_sent: bool,
     duel_count: u8,
     pub duel_winner: Vec<Option<PlayerIndex>>,
     pub time_elapsed: u16,
@@ -242,6 +244,8 @@ impl SingleDuel {
             first_attack_decider: None,
             last_select_message: None,
             match_kill_card_code: 0,
+            duel_end_pending: false,
+            match_end_sent: false,
             duel_count: 0,
             duel_winner: Vec::new(),
             time_elapsed: 0,
@@ -307,7 +311,8 @@ impl SingleDuel {
                             duel.time_elapsed = duel.time_elapsed.saturating_add(1);
                             let timed_out = duel.get_player_index(last_response)
                                     .map_or(false, |player| duel.time_elapsed >= player.time_limit);
-                            if timed_out {
+                            if timed_out && !duel.duel_end_pending {
+                                duel.duel_end_pending = true;
                                 let winner = duel.to_core_player(last_response).opponent();
                                 duel.send(gm::Win { winner, reason: WinReason::Timeout }.into(), SendTarget::All);
                                 duel.send_request_ex(crate::message::DuelEnd { winner, reason: WinReason::Timeout });
@@ -600,6 +605,24 @@ impl SingleDuel {
                 }
             }
             SendTarget::None => {}
+        }
+    }
+
+    fn disconnect_current_connections(&mut self) {
+        let players = self.players
+            .iter()
+            .enumerate()
+            .filter(|(_, player)| player.is_some())
+            .map(|(index, _)| Netplayer::Player(index as u8));
+        let observers = self.observers
+            .iter()
+            .enumerate()
+            .filter(|(_, observer)| observer.is_some())
+            .map(|(index, _)| Netplayer::Observer(index as u8));
+        let targets = players.chain(observers).collect::<Vec<_>>();
+
+        for target in targets {
+            self.send(stoc::LeaveGame { pos: target }.into(), SendTarget::Single(target));
         }
     }
 
@@ -1193,6 +1216,8 @@ pub mod ygopro_handlers {
                         duel.send(stoc::DuelStart.into(), SendTarget::AllPlayer);
                     }
                     if duel.stage != DuelStage::End {
+                        if duel.duel_end_pending { return true; }
+                        duel.duel_end_pending = true;
                         let leaving_index = if leaving_netplayer == 0 { PlayerIndex::Player1 } else { PlayerIndex::Player2 };
                         let loser = duel.to_core_player(leaving_index);
                         duel.send(gm::Win { winner: loser.opponent(), reason: WinReason::OpponentLeave }.into(), SendTarget::All);
@@ -1268,10 +1293,11 @@ pub mod ygopro_handlers {
     #[handler(ctos::Surrender)]
     #[register_to(YGOPRO_HANDLERS)]
     fn on_surrender(duel: &mut SingleDuel, index: PlayerIndex) {
-        if duel.core.ended {
+        if duel.core.ended || duel.duel_end_pending {
             warn!("Surrender requested but duel is already ended.");
             return;
         }
+        duel.duel_end_pending = true;
         let winner = duel.to_core_player(index).opponent();
         duel.send(gm::Win { winner, reason: WinReason::OpponentSurrender }.into(), SendTarget::All);
         duel.send_request_ex(ygopro::DuelEnd { winner, reason: WinReason::OpponentSurrender });
@@ -1493,7 +1519,10 @@ pub mod ygopro_handlers {
     #[handler(ygopro::MatchEnd)]
     #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
     fn on_match_end(duel: &mut SingleDuel) {
+        if duel.match_end_sent { return; }
+        duel.match_end_sent = true;
         duel.send(stoc::DuelEnd.into(), SendTarget::All);
+        duel.disconnect_current_connections();
     }
 
     #[handler(ygopro::RecreateDuel)]
@@ -1506,6 +1535,7 @@ pub mod ygopro_handlers {
             }
         }
         duel.first_attack_player = None;
+        duel.duel_end_pending = false;
         let current_decider = duel.first_attack_decider.unwrap_or(PlayerIndex::Player1);
         let last_winner = duel.duel_winner.last().and_then(|winner| *winner);
         duel.first_attack_decider = Some(last_winner.map(PlayerIndex::opponent).unwrap_or(current_decider.opponent()));
@@ -1715,8 +1745,13 @@ pub mod ygocore_handlers {
 
     #[handler(gm::Win)]
     #[register_to(YGOCORE_HANDLERS)]
-    fn on_win(duel: &mut SingleDuel, message: &gm::Win) {
+    fn on_win(duel: &mut SingleDuel, message: &gm::Win) -> SendTarget {
+        if duel.duel_end_pending {
+            return SendTarget::None;
+        }
+        duel.duel_end_pending = true;
         duel.send_request_ex(ygopro::DuelEnd { winner: message.winner, reason: message.reason });
+        SendTarget::All
     }
 
     #[handler(gm::SelectBattleCommand)]
