@@ -9,12 +9,16 @@ use syn::DeriveInput;
 struct ConfigurationArgs {
     #[darling(default)]
     register_to: Option<syn::LitStr>,
+    #[darling(default)]
+    sync: bool,
+    #[darling(default)]
+    prefix: Option<syn::LitStr>,
 }
 
 #[derive(Default, FromMeta)]
 struct FieldConfigArgs {
     #[darling(default)]
-    ignore: bool,
+    not_from_env: bool,
     #[darling(default)]
     default: Option<syn::LitStr>,
 }
@@ -40,6 +44,11 @@ pub fn configuration(input: TokenStream) -> TokenStream {
         Ok(path) => path,
         Err(err) => return darling::Error::custom(format!("register_to must be a path: {err}")).write_errors().into(),
     };
+    let map_type = if args.sync {
+        quote!(dyn ::anymap3::CloneAny + Send + Sync)
+    } else {
+        quote!(dyn ::anymap3::CloneAny + Send)
+    };
     let fields = match &input.data {
         syn::Data::Struct(syn::DataStruct { fields: syn::Fields::Named(named), .. }) => named.named.iter().collect::<Vec<_>>(),
         _ => return darling::Error::custom("Configuration derive requires a named-field struct").write_errors().into(),
@@ -58,7 +67,7 @@ pub fn configuration(input: TokenStream) -> TokenStream {
             },
             None => quote!(Default::default()),
         };
-        field_configs.push(FieldConfig { ident, default, overridable: !field_args.ignore });
+        field_configs.push(FieldConfig { ident, default, overridable: !field_args.not_from_env });
     }
     let struct_literal = field_configs.iter().map(|config| {
         let ident = &config.ident;
@@ -67,10 +76,18 @@ pub fn configuration(input: TokenStream) -> TokenStream {
     });
     let field_overrides: Vec<proc_macro2::TokenStream> = field_configs.iter().filter(|config| config.overridable).map(|config| {
         let ident = &config.ident;
-        let name = syn::LitStr::new(&ident.to_string(), ident.span());
+        let name = syn::LitStr::new(&ident.to_string().to_ascii_lowercase(), ident.span());
+        let key_tokens = match &args.prefix {
+            Some(prefix) if !prefix.value().is_empty() => {
+                let prefix = syn::LitStr::new(&prefix.value().to_ascii_lowercase(), prefix.span());
+                quote!(&format!("{}_{}", #prefix, #name))
+            }
+            Some(_) => quote!(#name),
+            None => quote!(&format!("{}_{}", config_prefix, #name)),
+        };
         quote! {
             configuration.#ident = config_manager
-                .get(#name)
+                .get(#key_tokens)
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(configuration.#ident);
         }
@@ -78,15 +95,21 @@ pub fn configuration(input: TokenStream) -> TokenStream {
     let apply_overrides = if field_overrides.is_empty() {
         quote!()
     } else {
+        let auto_prefix = match &args.prefix {
+            Some(_) => quote!(),
+            None => quote! {
+                let config_prefix = module_path!().rsplit("::").next().unwrap_or("");
+            },
+        };
         quote! {
-            if let Some(config_manager) = crate::managers::config_manager::load().as_ref() {
-                #(#field_overrides)*
-            }
+            let config_manager = crate::managers::config_manager::load();
+            #auto_prefix
+            #(#field_overrides)*
         }
     };
     quote! {
         impl #name {
-            fn default_configuration(configurations: &mut ::anymap3::Map<dyn ::anymap3::CloneAny + Send>) -> Result<(), Box<dyn std::error::Error>> {
+            fn default_configuration(configurations: &mut ::anymap3::Map<#map_type>) -> Result<(), Box<dyn std::error::Error>> {
                 let mut configuration = #name {
                     #(#struct_literal),*
                 };
@@ -97,7 +120,7 @@ pub fn configuration(input: TokenStream) -> TokenStream {
         }
 
         #[linkme::distributed_slice(#register_to)]
-        static CONFIGURATION: (&'static str, fn(&mut ::anymap3::Map<dyn ::anymap3::CloneAny + Send>) -> Result<(), Box<dyn std::error::Error>>) = (module_path!(), #name::default_configuration);
+        static CONFIGURATION: (&'static str, fn(&mut ::anymap3::Map<#map_type>) -> Result<(), Box<dyn std::error::Error>>) = (module_path!(), #name::default_configuration);
 
         impl<Req, State, Res> ::ygopro_handler::FromRequest<Req, State, Res> for #name
         where
@@ -126,7 +149,7 @@ fn parse_args(attrs: &[Attribute]) -> darling::Result<ConfigurationArgs> {
                 other => Err(darling::Error::custom(format!("expected #[config(...)], got {other:?}"))),
             }
         }
-        None => Ok(ConfigurationArgs { register_to: None }),
+        None => Ok(ConfigurationArgs { register_to: None, sync: false, prefix: None }),
     }
 }
 

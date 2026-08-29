@@ -11,42 +11,38 @@ use ygopro_data::message::ctos;
 
 use ygopro_derive::Configuration;
 use ygopro_derive::after;
+use ygopro_derive::command;
 use ygopro_derive::register_to;
 
 use crate::message as ygopro;
-use crate::common::SendTarget;
-use crate::single_duel::SingleDuel;
-use crate::single_duel::ygopro_handlers::Handler;
-use crate::single_duel::ygopro_handlers::HandlerEx;
-use crate::single_duel::ygopro_handlers::YGOPRO_HANDLERS;
-use crate::single_duel::ygopro_handlers::YGOPRO_HANDLERS_EX;
+use crate::duel::SendTarget;
+use crate::duel::Duel;
+use crate::ygopro_handlers::Handler;
+use crate::ygopro_handlers::HandlerEx;
+use crate::ygopro_handlers::YGOPRO_HANDLERS;
+use crate::ygopro_handlers::YGOPRO_HANDLERS_EX;
 
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 
 #[derive(Clone, Configuration)]
 pub struct Configuration {
-    #[config(ignore)]
+    #[config(not_from_env)]
     pub terminate_when: SendTarget,
     #[config(default = "true")]
     pub terminate_when_match_end: bool
 }
 
-pub fn is_player_left(duel: &SingleDuel, target: SendTarget) -> bool {
+pub fn is_player_left(duel: &Duel, target: SendTarget) -> bool {
     match target {
         SendTarget::Single(netplayer) => match netplayer {
             Netplayer::Player(index) => duel.players.get(index as usize).map_or(true, Option::is_none),
-            Netplayer::Observer(index) => duel.observers.get(index as usize).map_or(true, Option::is_none),
-            Netplayer::Undecided(index) => duel.uninit_players.get(index as usize).map_or(true, Option::is_none),
+            Netplayer::Observer(index) => !duel.observers.contains(index as usize),
+            Netplayer::Undecided(index) => !duel.uninit_players.contains(index as usize),
             Netplayer::Unknown => { warn!("set terminate condition to unknown player"); is_player_left(duel, SendTarget::All) },
         },
         SendTarget::Except(_) => { warn!("set terminate condition to not supported except"); is_player_left(duel, SendTarget::All) },
-        SendTarget::Core(core_player) => match core_player {
-            CorePlayer::FirstAttackPlayer | CorePlayer::SecondAttackPlayer => is_player_left(duel, SendTarget::Single(duel.to_net_player(core_player))),
-            CorePlayer::None => is_player_left(duel, SendTarget::None),
-            CorePlayer::All => is_player_left(duel, SendTarget::AllPlayer),
-            CorePlayer::Rule => { warn!("set terminate condition to rule player"); is_player_left(duel, SendTarget::All) },
-        }
+        SendTarget::Core(core_player) => { log::warn!("set terminate condition to core player {core_player:?}, which is not supported for now"); false },
         SendTarget::All => is_player_left(duel, SendTarget::AllPlayer) && is_player_left(duel, SendTarget::AllObserver),
         SendTarget::AllPlayer => duel.players.iter().all(|player| player.is_none()),
         SendTarget::AllObserver => duel.observers.is_empty(),
@@ -56,7 +52,7 @@ pub fn is_player_left(duel: &SingleDuel, target: SendTarget) -> bool {
 
 #[after(ctos::LeaveGame)]
 #[register_to(YGOPRO_HANDLERS)]
-fn on_leave_game(duel: &mut SingleDuel, config: Configuration) -> bool {
+fn on_leave_game(duel: &mut Duel, config: Configuration) -> bool {
     is_player_left(duel, config.terminate_when)
 }
 
@@ -64,4 +60,10 @@ fn on_leave_game(duel: &mut SingleDuel, config: Configuration) -> bool {
 #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
 fn on_match_end(configuration: Configuration) -> &'static str {
     if configuration.terminate_when_match_end { "terminate" } else { "continue" }
+}
+
+#[command]
+#[register_to(crate::command::COMMANDS as crate::command::CommandHandler with &'static str)]
+fn terminate() -> &'static str {
+    "terminate"
 }

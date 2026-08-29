@@ -8,14 +8,17 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::LengthDelimitedCodec;
 
 use ygopro::Configuration;
-use ygopro::SingleDuel;
+use ygopro::host::DuelHost;
+use ygopro::single_duel::SingleDuel;
 use ygopro_core_wrapper::random::SEED_COUNT;
 use ygopro_core_wrapper::DuelSeed;
+use ygopro_data::complex::Complex;
 use ygopro_data::constants::Mode;
 use ygopro_data::constants::MasterRule;
 use ygopro_data::constants::Rule;
 use ygopro_data::data::ReplayMode;
 use ygopro_data::message::ctos;
+use ygopro_data::message::stoc;
 use ygopro_data::message::HostInfo;
 use ygopro_handler::RoomProvider;
 
@@ -43,7 +46,7 @@ fn parse_args() -> (u16, HostInfo, ReplayMode, Vec<[u32; SEED_COUNT]>) {
     let deck_manager = ygopro::managers::deck_manager::load();
 
     let hostinfo = HostInfo {
-        lflist: deck_manager.as_ref().and_then(|dm| dm.get_lflist_by_index(args[2].parse().unwrap_or(0))).map(|l| l.hash).unwrap_or(0),
+        lflist: deck_manager.get_lflist_by_index(args[2].parse().unwrap_or(0)).map(|l| l.hash).unwrap_or(0),
         rule: Rule::try_from(args[3].parse::<u8>().unwrap_or(0)).unwrap_or(Rule::All),
         mode: match args[4].parse::<u8>().unwrap_or(0) {
             m if m > 2 => Mode::Single,
@@ -93,7 +96,8 @@ async fn start_server(port: u16, hostinfo: HostInfo, replay_mode: ReplayMode, pr
         }
     }));
     configuration.enable_plugin_with_configuration(ygopro::plugin::replay::NAME, ygopro::plugin::replay::Configuration { mode: replay_mode });
-    let (mut duel, handle) = SingleDuel::new(hostinfo, configuration);
+    let mut duel = DuelHost::new(hostinfo, configuration);
+    let finish_signal = <DuelHost as RoomProvider<ctos::Message, Complex<stoc::Message>>>::get_finish_signal(&mut duel);
 
     tokio::spawn(async move {
         loop {
@@ -116,7 +120,7 @@ async fn start_server(port: u16, hostinfo: HostInfo, replay_mode: ReplayMode, pr
                 Err(_) => None,
             });
 
-            let mut stoc_stream = duel.add(ctos_stream);
+            let mut stoc_stream = <DuelHost as RoomProvider<ctos::Message, Complex<stoc::Message>>>::add(&mut duel, ctos_stream);
 
             tokio::spawn(async move {
                 while let Some(message) = stoc_stream.next().await {
@@ -126,5 +130,5 @@ async fn start_server(port: u16, hostinfo: HostInfo, replay_mode: ReplayMode, pr
         }
     });
 
-    handle.await.ok();
+    finish_signal.await;
 }

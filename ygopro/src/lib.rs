@@ -1,18 +1,27 @@
 pub mod single_duel;
-pub mod common;
+pub mod tag_duel;
+pub mod duel;
+pub mod host;
 pub mod managers;
 pub mod plugin;
 pub mod message;
+pub mod command;
+mod ygopro_handlers;
+mod ygocore_handlers;
+mod player;
+mod configuration;
 #[cfg(feature = "zip")]
 pub mod ypk;
 
-pub use single_duel::SingleDuelHost as SingleDuel;
-pub use common::Configuration as Configuration;
+// pub use host::DuelHost as SingleDuel;
+pub use configuration::Configuration as Configuration;
 
 use std::ffi::CStr;
 use std::os::raw::c_char;
-
 use managers::*;
+
+#[macro_use] extern crate ygopro_derive;
+
 pub const PRO_VERSION: u16 = 0x1362;
 
 pub fn init() {

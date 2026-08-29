@@ -96,7 +96,7 @@ pub async fn validate_replay(path: &Path, wait: Option<u16>, timeout_seconds: u6
     }
 
     let data_manager = data_manager::load();
-    let data_manager = data_manager.as_ref().expect("data manager is not initialized");
+    let data_manager = data_manager.as_ref();
     check_deck_cards(&replay.body.host_deck, data_manager)?;
     check_deck_cards(&replay.body.client_deck, data_manager)?;
 
@@ -114,8 +114,9 @@ pub async fn validate_replay(path: &Path, wait: Option<u16>, timeout_seconds: u6
             let seed_sequence = replay.header.seed_sequence;
             let mut configuration = ygopro::Configuration::default();
             configuration.enable_plugin(ygopro::plugin::no_init_shuffle_deck::NAME);
+            configuration.enable_plugin(ygopro::plugin::soumatou::NAME);
             configuration.seed_generator = Some(Box::new(move |_duel_count: u8| DuelSeed::Complicated(seed_sequence)));
-            let (mut host, _duel_task) = ygopro::SingleDuel::new(host_info, configuration);
+            let mut host = ygopro::host::DuelHost::new(host_info, configuration);
             validate_with_room(&mut host, replay,  wait, validation_timeout).await
         }
     }

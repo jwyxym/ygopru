@@ -9,6 +9,7 @@ pub mod soumatou;
 pub mod terminate;
 pub mod time_backed;
 pub mod time_compensator;
+pub mod time_limit;
 
 #[distributed_slice]
 pub static DEFAULT_ENABLED_PLUGINS: [&'static str];

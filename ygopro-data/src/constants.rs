@@ -34,6 +34,15 @@ pub enum Netplayer {
     Unknown
 }
 
+impl Netplayer {
+    pub fn opponent(self) -> Self {
+        match self {
+            Netplayer::Player(p) => Netplayer::Player(p ^ 1),
+            _ => Netplayer::Unknown,
+        }
+    }
+}
+
 impl FromPrimitive for Netplayer {
     type Primitive = u8;
 
@@ -134,6 +143,11 @@ impl std::ops::Mul for CorePlayer {
             (_, _) => CorePlayer::All
         }
     }
+}
+
+pub trait PlayerConverter {
+    fn to_net_player(&self, core_player: CorePlayer) -> Netplayer;
+    fn to_core_player(&self, net_player: Netplayer) -> CorePlayer;
 }
 
 #[bitfield]
@@ -595,6 +609,45 @@ pub enum Color {
     White = 17,
     Gray = 18,
     Darkgray = 19,
+}
+
+impl std::fmt::Display for Color {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Color::Observer => "OBSERVER",
+            Color::Lightblue => "LIGHTBLUE",
+            Color::Red => "RED",
+            Color::Green => "GREEN",
+            Color::Blue => "BLUE",
+            Color::Babyblue => "BABYBLUE",
+            Color::Pink => "PINK",
+            Color::Yellow => "YELLOW",
+            Color::White => "WHITE",
+            Color::Gray => "GRAY",
+            Color::Darkgray => "DARKGRAY",
+        })
+    }
+}
+
+impl std::str::FromStr for Color {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(match value.to_ascii_uppercase().as_str() {
+            "OBSERVER" => Color::Observer,
+            "LIGHTBLUE" => Color::Lightblue,
+            "RED" => Color::Red,
+            "GREEN" => Color::Green,
+            "BLUE" => Color::Blue,
+            "BABYBLUE" => Color::Babyblue,
+            "PINK" => Color::Pink,
+            "YELLOW" => Color::Yellow,
+            "WHITE" => Color::White,
+            "GRAY" => Color::Gray,
+            "DARKGRAY" => Color::Darkgray,
+            _ => return Err(()),
+        })
+    }
 }
 
 #[derive(BinRead, BinWrite, Copy, Clone, Eq, PartialEq, TryFromPrimitive, IntoPrimitive, Debug)]

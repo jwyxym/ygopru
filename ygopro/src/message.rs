@@ -6,8 +6,8 @@ use ygopro_data::constants::*;
 use ygopro_data::message;
 use ygopro_derive::Message;
 
-use crate::single_duel::SingleDuel;
-use crate::common::SendTarget;
+use crate::duel::Duel;
+use crate::duel::SendTarget;
 
 
 #[derive(Debug, Message)]
@@ -65,48 +65,55 @@ pub struct RecreateDuel;
 pub struct MatchEnd;
 
 #[derive(Debug, Message)]
+#[message(ygopro, flag = 21)]
+pub struct Timeout {
+    pub player: crate::duel::PlayerIndex,
+}
+
+#[derive(Debug, Message)]
 #[message(ygopro, flag = 255)]
 pub struct Terminate;
 
 trait Next {
-    fn process_continue(_duel: &mut SingleDuel) {}
-    fn process_terminate(duel: &mut SingleDuel) {
-        duel.send_request_ex(MatchEnd);
+    fn process_continue(_duel: &mut Duel) {}
+    fn process_terminate(duel: &mut Duel) {
+        duel.queue_request_ex(MatchEnd);
     }
 }
 
 impl Next for ClientJoin {}
 impl Next for FirstShuffle {}
 impl Next for DuelInit {
-    fn process_continue(duel: &mut SingleDuel) {
-        duel.send_request_ex(DuelStart);
+    fn process_continue(duel: &mut Duel) {
+        duel.queue_request_ex(DuelStart);
     }
 }
 impl Next for DuelStart {}
 
 impl Next for DuelEnd {
-    fn process_continue(duel: &mut SingleDuel) {
-        duel.send_request_ex(GenerateReplay);
-        duel.send_request_ex(JudgeContinueMatch);
+    fn process_continue(duel: &mut Duel) {
+        duel.queue_request_ex(GenerateReplay);
+        duel.queue_request_ex(JudgeContinueMatch);
     }
 }
 
 impl Next for GenerateReplay {}
 
 impl Next for JudgeContinueMatch {
-    fn process_continue(duel: &mut SingleDuel) {
-        duel.send_request_ex(RecreateDuel);
+    fn process_continue(duel: &mut Duel) {
+        duel.queue_request_ex(RecreateDuel);
     }
 }
 
 impl Next for RecreateDuel {}
+impl Next for Timeout {}
 impl Next for MatchEnd {
-    fn process_terminate(_duel: &mut SingleDuel) {
-        warn!("Send terminate response in match end processing")
+    fn process_terminate(duel: &mut Duel) {
+        duel.request_sender.send(crate::duel::Request::Command { name: "terminate", arguments: [0; 8] }).ok();
     }
 }
 impl Next for Terminate {
-    fn process_terminate(_duel: &mut SingleDuel) {
+    fn process_terminate(_duel: &mut Duel) {
         warn!("Send terminate response in terminate processing")
     }
 }
@@ -121,13 +128,13 @@ macro_rules! generate_enum {
         impl ygopro_data::message::PureMessage for Message {}
 
         impl Message {
-            pub fn process_continue(self, duel: &mut SingleDuel) {
+            pub fn process_continue(self, duel: &mut Duel) {
                 match self {
                     $(Message::$message_name(_) => <$message_name as Next>::process_continue(duel)),*
                 }
             }
 
-            pub fn process_terminate(self, duel: &mut SingleDuel) {
+            pub fn process_terminate(self, duel: &mut Duel) {
                 match self {
                     $(Message::$message_name(_) => <$message_name as Next>::process_terminate(duel)),*
                 }
@@ -149,17 +156,17 @@ macro_rules! generate_enum {
                 }
             }
 
-            impl From<$message_name> for crate::common::RequestEx {
+            impl From<$message_name> for crate::ygopro_handlers::RequestEx {
                 fn from(message: $message_name) -> Self {
-                    crate::common::RequestEx { message: message.into(), extra: SendTarget::All }
+                    crate::ygopro_handlers::RequestEx { message: message.into(), extra: SendTarget::All }
                 }
             }
 
-            impl From<$message_name> for crate::single_duel::Request {
-                fn from(message: $message_name) -> Self {
-                    crate::single_duel::Request::MessageEx(message.into())
-                }
-            }
+            // impl From<$message_name> for crate::ygopro_handlers::Request {
+            //     fn from(message: $message_name) -> Self {
+            //         crate::duel::Request::MessageEx(message.into())
+            //     }
+            // }
 
             impl TryFrom<Message> for $message_name {
                 type Error = ygopro_data::message::Error;
@@ -206,5 +213,6 @@ generate_enum!(
     JudgeContinueMatch = 12,
     RecreateDuel = 13,
     MatchEnd = 20,
+    Timeout = 21,
     Terminate = 255
 );

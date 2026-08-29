@@ -7,34 +7,46 @@ use log::warn;
 use ygopro_data::constants::DuelStage;
 use ygopro_data::constants::Netplayer;
 use ygopro_data::message::ctos;
+use ygopro_data::message::stoc;
 
 use ygopro_derive::after;
 use ygopro_derive::command;
 use ygopro_derive::register_to;
+use ygopro_handler::MessageKey;
 
-use crate::common;
-use crate::common::Response;
+use crate::duel::Duel;
 use crate::message as ygopro;
-use crate::single_duel::SingleDuel;
-use crate::single_duel::ygopro_handlers::YGOPRO_HANDLERS;
-use crate::single_duel::ygopro_handlers::YGOPRO_HANDLERS_EX;
-use crate::single_duel::ygopro_handlers::Handler as ygopro_handler;
-use crate::single_duel::ygopro_handlers::HandlerEx as ygopro_handler_ex;
+use crate::ygopro_handlers::Handler;
+use crate::ygopro_handlers::HandlerEx;
+use crate::ygopro_handlers::Response;
+use crate::ygopro_handlers::YGOPRO_HANDLERS;
+use crate::ygopro_handlers::YGOPRO_HANDLERS_EX;
 
 pub static NAME: &'static str = module_path!();
 
 #[command]
-#[register_to(crate::single_duel::COMMANDS as crate::single_duel::CommandHandler with &'static str)]
-fn soumatou(duel: &mut SingleDuel, arguments: &[u8; 8]) {
+#[register_to(crate::command::COMMANDS as crate::command::CommandHandler with &'static str)]
+fn soumatou(duel: &mut Duel, arguments: &[u8; 8]) {
     let target = Netplayer::Observer(arguments[0]).into();
-    for message in &duel.masked_messages {
-        duel._send(message.clone(), target);
+    let duel_start_key = stoc::DuelStart.message_key();
+    let directed_keys = [
+        stoc::MessageType::JoinGame.message_key(),
+        stoc::MessageType::SelectTp.message_key(),
+        stoc::MessageType::SelectHand.message_key(),
+        stoc::MessageType::TimeLimit.message_key(),
+        stoc::MessageType::ChangeSide.message_key(),
+        stoc::MessageType::HandResult.message_key(),
+        stoc::MessageType::TeammateSurrender.message_key(),
+    ];
+    for message in duel.sender.masked_messages.iter().skip_while(|message| message.message_key() != duel_start_key) {
+        if directed_keys.contains(&message.message_key()) { continue; }
+        duel.sender.send_without_record(message.clone(), target);
     }
 }
 
 #[after(ctos::JoinGame)]
-#[register_to(YGOPRO_HANDLERS as ygopro_handler)]
-fn on_join(duel: &mut SingleDuel, player: Netplayer) {
+#[register_to(YGOPRO_HANDLERS)]
+fn on_join(duel: &mut Duel, player: Netplayer) {
     if duel.stage > DuelStage::Begin {
         if let Netplayer::Observer(index) = player {
             // we cannot directly send all messages here becuase
@@ -42,19 +54,20 @@ fn on_join(duel: &mut SingleDuel, player: Netplayer) {
             // which is in current result send to user.
             // so the only way is to make that a command and that
             // will queue after the current response messages.
-            duel.request_sender.send(crate::single_duel::Request::Command { name: "soumatou", arguments: [index, 0, 0, 0, 0, 0, 0, 0] }).ok();
+            duel.request_sender.send(crate::duel::Request::Command { name: "soumatou", arguments: [index, 0, 0, 0, 0, 0, 0, 0] }).ok();
         }
     }
 }
 
 #[after(ygopro::ClientJoin)]
-#[register_to(YGOPRO_HANDLERS_EX as ygopro_handler_ex)]
-fn on_client_join(duel: &mut SingleDuel, join: &mut ygopro::ClientJoin, response: &mut Response) {
+#[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+fn on_client_join(duel: &mut Duel, join: &mut ygopro::ClientJoin, response: &mut Response) {
     if duel.stage > DuelStage::Begin {
         if let Some(oneshot) = join.position_sender.take() {
             *response = Response::Continue;
-            let player = common::DuelPlayer::new(join.stoc_sender.clone());
-            let undecided_index = SingleDuel::insert_to_last_available_index(&mut duel.uninit_players, player);
+            let player = crate::player::BaseDuelPlayer::new(join.stoc_sender.clone());
+            let undecided_index = duel.uninit_players.insert(player);
+            duel.sender.undecided.insert(join.stoc_sender.clone());
             oneshot.send(Netplayer::Undecided(undecided_index as u8)).ok();
         } else {
             warn!("ClientJoin try to send the position, but find it already taken.")

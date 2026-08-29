@@ -3,8 +3,8 @@ use ygopro_derive::register_to;
 use ygopro_handler::StopFlag;
 
 use crate::message as ygopro;
-use crate::single_duel::ygopro_handlers::HandlerEx;
-use crate::single_duel::ygopro_handlers::YGOPRO_HANDLERS_EX;
+use crate::ygopro_handlers::HandlerEx;
+use crate::ygopro_handlers::YGOPRO_HANDLERS_EX;
 
 pub static NAME: &'static str = module_path!();
 

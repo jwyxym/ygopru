@@ -3,6 +3,7 @@
 //! [`Room`] is a message hub connecting clients to a game server through a
 //! [`RoomProvider`] trait. The provider is a black box that only exposes [`add`](RoomProvider::add).
 
+use std::future::Future;
 use std::io::Cursor;
 
 use binrw::BinWrite;
@@ -16,8 +17,10 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 pub trait RoomProvider<ClientToServerMessage, ServerToClientMessage> {
     type ServerToClientStream: Stream<Item = ServerToClientMessage> + Unpin + Send + 'static;
+    type FinishFuture: Future<Output = ()> + Unpin + Send + 'static;
 
     fn add(&mut self, client_to_server_stream: impl Stream<Item = ClientToServerMessage> + Unpin + Send + 'static) -> Self::ServerToClientStream;
+    fn get_finish_signal(&mut self) -> Self::FinishFuture;
 }
 
 fn create_sender<SinkType, Data>(sink: SinkType) -> mpsc::UnboundedSender<Data>
