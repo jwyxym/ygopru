@@ -133,17 +133,17 @@ You can also replace the `ygopro` binary file under `srvpro`.
 
 ### Run with Docker
 
-A prebuilt image is published on Docker Hub as `iamipanda/ygopru`.
+A prebuilt image is published on Docker Hub as `iami/ygopru`.
 
 ```bash
 # pull the image and run it
 docker run -p 7911:7911 \
     -v "$PWD/cards.cdb:/ygopro/cards.cdb" \
     -v "$PWD/script:/ygopro/script" \
-    iamipanda/ygopru
+    iami/ygopru
 ```
 
-You can also pass the full CLI argument list the same way, e.g. `docker run -p 23333:23333 iamipanda/ygopru 23333 0 0 0 F F F 8000 5 1 180 0`.
+You can also pass the full CLI argument list the same way, e.g. `docker run -p 23333:23333 iami/ygopru 23333 0 0 0 F F F 8000 5 1 180 0`.
 
 ### Toolkits
 
@@ -161,7 +161,7 @@ You can also pass the full CLI argument list the same way, e.g. `docker run -p 2
 ```
 
 `validate-replay` and `tsukuyomi` can run against an external `ygopro-server` binary instead of the in-process engine
-via `--server-bin <path> [--server-cwd <dir>]`.
+via `--server-bin <path> [--server-cwd <dir>]`. You need a self-compiling server which disable the init shuffle.
 
 ## Related projects
 

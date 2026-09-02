@@ -125,17 +125,17 @@ ygopro::cli::start_local_server(7911, duel_host).await;
 
 ### 用 Docker 运行
 
-Docker Hub 上发布了预构建镜像 `iamipanda/ygopru`。
+Docker Hub 上发布了预构建镜像 `iami/ygopru`。
 
 ```bash
 # 拉取并运行镜像
 docker run -p 7911:7911 \
     -v "$PWD/cards.cdb:/ygopro/cards.cdb" \
     -v "$PWD/script:/ygopro/script" \
-    iamipanda/ygopru
+    iami/ygopru
 ```
 
-你也可以用同样方式传入完整的 CLI 参数列表，例如 `docker run -p 23333:23333 iamipanda/ygopru 23333 0 0 0 F F F 8000 5 1 180 0`。
+你也可以用同样方式传入完整的 CLI 参数列表，例如 `docker run -p 23333:23333 iami/ygopru 23333 0 0 0 F F F 8000 5 1 180 0`。
 
 ### 工具包
 
@@ -152,7 +152,7 @@ docker run -p 7911:7911 \
 ./ygopro-toolkits proxy --target <server:port> [--port 8911]
 ```
 
-`validate-replay` 和 `tsukuyomi` 可以通过 `--server-bin <path> [--server-cwd <dir>]` 使用外部的 `ygopro-server` 二进制运行，而不是进程内引擎。
+`validate-replay` 和 `tsukuyomi` 可以通过 `--server-bin <path> [--server-cwd <dir>]` 使用外部的 `ygopro-server` 二进制运行，而不是进程内引擎。你需要一个自己编译的原生`ygopro`的`server`分支，且其开局不会洗牌。
 
 ## 相关项目
 

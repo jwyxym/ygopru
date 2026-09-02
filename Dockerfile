@@ -7,7 +7,7 @@ ENV http_proxy=$PROXY \
 
 WORKDIR /workspace
 COPY . .
-RUN cargo build --release --target x86_64-unknown-linux-musl
+RUN cargo build --release --target x86_64-unknown-linux-musl --workspace
 
 FROM alpine:latest
 WORKDIR /ygopro
