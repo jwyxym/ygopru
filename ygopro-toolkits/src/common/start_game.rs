@@ -54,11 +54,11 @@ pub fn create_player<Room: RoomProvider<ctos::Message, Complex<stoc::Message>>>(
 pub async fn start_duel<Room: RoomProvider<ctos::Message, Complex<stoc::Message>>>(replay: &Replay, room: &mut Room) -> Result<(Player<Room>, Player<Room>), ReconstructionError> {
     let mut player1 = create_player(room);
     send(&player1.ctos_sender, CorePlayer::FirstAttackPlayer, ctos::PlayerInfo { name: replay.body.host_name.clone() }.into());
-    send(&player1.ctos_sender, CorePlayer::FirstAttackPlayer, ctos::JoinGame { version: ygopro::PRO_VERSION, gameid: 0, pass: FixedLengthString::allocate() }.into());
+    send(&player1.ctos_sender, CorePlayer::FirstAttackPlayer, ctos::JoinGame { version: *ygopro::PRO_VERSION, gameid: 0, pass: FixedLengthString::allocate() }.into());
     wait_for(&mut player1.stoc_stream, CorePlayer::FirstAttackPlayer, stoc::MessageType::TypeChange).await?;
     let mut player2 = create_player(room);
     send(&player2.ctos_sender, CorePlayer::SecondAttackPlayer, ctos::PlayerInfo { name: replay.body.client_name.clone() }.into());
-    send(&player2.ctos_sender, CorePlayer::SecondAttackPlayer, ctos::JoinGame { version: ygopro::PRO_VERSION, gameid: 0, pass: FixedLengthString::allocate() }.into());
+    send(&player2.ctos_sender, CorePlayer::SecondAttackPlayer, ctos::JoinGame { version: *ygopro::PRO_VERSION, gameid: 0, pass: FixedLengthString::allocate() }.into());
     wait_for(&mut player2.stoc_stream, CorePlayer::SecondAttackPlayer, stoc::MessageType::TypeChange).await?;
 
     wait_for(&mut player1.stoc_stream, CorePlayer::FirstAttackPlayer, stoc::MessageType::HsPlayerEnter).await?;

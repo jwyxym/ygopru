@@ -1,3 +1,7 @@
+/// Disable the initial shuffle of the deck in ygopro.
+/// In ygopro, when duel start, we have an init shuffle of the deck. That plugin will disable it.
+/// That's often useful for replaying a duel with a known seed, or for other testing purposes.
+
 use ygopro_derive::before;
 use ygopro_derive::register_to;
 use ygopro_handler::StopFlag;

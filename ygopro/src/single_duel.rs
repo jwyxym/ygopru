@@ -194,7 +194,7 @@ impl SingleDuel {
         let mut replay = Replay {
             header: ReplayHeader {
                 id: ReplayVersion::V2 as u32,
-                version: crate::PRO_VERSION as u32,
+                version: *crate::plugin::version_check::PRO_VERSION as u32,
                 flag: ReplayHeaderFlags::Uniform | ReplayHeaderFlags::Compressed,
                 seed: 0,
                 data_size: 0,

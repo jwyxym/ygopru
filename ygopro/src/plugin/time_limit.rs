@@ -1,7 +1,5 @@
-//! Per-duel clock.
-//! The time limit / timeout policy lives here as a plugin so it can be
-//! swapped without touching duel core logic. `TimerTick` is a command so the
-//! heartbeat flows through the normal command channel.
+//! Limit player's duel time.
+//! 
 
 use linkme::distributed_slice;
 use log::warn;

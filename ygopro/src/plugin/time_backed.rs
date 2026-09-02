@@ -1,6 +1,4 @@
-//! Time added back to a player after each operation.
-//! How much time a player is compensated for is a deployment decision, not
-//! duel core logic, so it lives in a plugin instead of `single_duel`.
+//! When player operates, the server will add some time to that player.
 
 use linkme::distributed_slice;
 

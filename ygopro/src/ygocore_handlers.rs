@@ -3,22 +3,17 @@ use std::io::Cursor;
 
 use binrw::BinRead;
 use linkme::distributed_slice;
-use log::warn;
 
 use ygopro_core_wrapper::ProcessResultFlags;
 use ygopro_data::constants::*;
 use ygopro_data::message::*;
 use ygopro_data::message::gm::GameMessage;
-use ygopro_handler::Bundle;
-use ygopro_handler::FromRequest;
 use ygopro_handler::IntoResponse;
 use ygopro_derive::before;
 use ygopro_derive::handler;
 use ygopro_derive::register_to;
 
-use crate::duel;
 use crate::duel::Duel;
-use crate::player::AllowMessage;
 use crate::message as ygopro;
 use crate::duel::SendTarget;
 use crate::ygopro_handlers;

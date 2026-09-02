@@ -1,11 +1,10 @@
 //! Room termination policy.
-//! Whether a room should die when players leave is a deployment decision, not
-//! duel core logic, so it lives in a plugin instead of `single_duel`.
+//! ygopro exits when all players leave, but in server scenarios, we want to terminate
+//! the instance when duel ends. That plugin help set the termination policy for a room.
 
 use log::warn;
 use linkme::distributed_slice;
 
-use ygopro_data::constants::CorePlayer;
 use ygopro_data::constants::Netplayer;
 use ygopro_data::message::ctos;
 

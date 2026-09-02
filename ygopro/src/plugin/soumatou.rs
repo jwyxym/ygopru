@@ -1,6 +1,5 @@
-//! Resend the duel history to observers that join after the duel started.
-//! Whether late joins are allowed and how history is replayed are deployment
-//! decisions, not duel core logic, so they live in a plugin instead of `single_duel`.
+//! Allow join duel on middle of duel.
+//! When that happened, server will accept user as observer, and send all history message to that user.
 
 use log::warn;
 

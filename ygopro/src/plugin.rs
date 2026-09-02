@@ -1,3 +1,6 @@
+//! Plugin system for ygopro.
+//! Each 
+
 use linkme::distributed_slice;
 
 pub mod bo;
@@ -10,6 +13,7 @@ pub mod terminate;
 pub mod time_backed;
 pub mod time_compensator;
 pub mod time_limit;
+pub mod version_check;
 
 #[distributed_slice]
 pub static DEFAULT_ENABLED_PLUGINS: [&'static str];

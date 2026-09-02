@@ -1,3 +1,5 @@
+/// Replace the default best-of-3 rule with a custom best-of-N rule.
+
 use ygopro_derive::Configuration;
 use ygopro_derive::after;
 use ygopro_derive::register_to;

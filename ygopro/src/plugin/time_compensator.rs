@@ -1,7 +1,4 @@
-//! Time compensator buffer.
-//! Small delays are taken from a compensator instead of the real time limit,
-//! and meaningful operations refill it. This policy is a deployment decision,
-//! not duel core logic, so it lives in a plugin instead of `single_duel`.
+//! When plyaer operates in a short time period, this time will be ignored.
 
 use linkme::distributed_slice;
 

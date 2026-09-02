@@ -237,9 +237,6 @@ fn on_create_game(duel: &mut Duel, create_game: &ctos::CreateGame) {
 #[handler(ctos::JoinGame)]
 #[register_to(YGOPRO_HANDLERS)]
 fn on_join_game(duel: &mut Duel, player: Netplayer, request: &mut Request, join_game: &ctos::JoinGame) -> Result<Vec<stoc::Message>, stoc::Message> {
-if join_game.version != crate::PRO_VERSION {
-        return Err(stoc::ErrorMessage { err: ErrorMessage::VersionError(crate::PRO_VERSION) }.into());
-    }
     if !duel.pass.is_empty() && join_game.pass != duel.pass {
         return Err(stoc::ErrorMessage { err: ErrorMessage::JoinError(JoinError::WrongPassword) }.into());
     }

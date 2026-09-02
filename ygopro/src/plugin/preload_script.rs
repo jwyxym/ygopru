@@ -1,6 +1,5 @@
-//! Extra scripts preloaded into every core duel after creation.
-//! Which scripts a server ships is a deployment decision, not duel core logic,
-//! so it lives in a plugin instead of `single_duel`.
+//! Extra scripts preloaded into every duel after creation.
+//! It is often for loading server-limited special rules.
 
 use linkme::distributed_slice;
 

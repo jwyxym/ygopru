@@ -233,7 +233,6 @@ impl TagDuel {
     pub fn create_replay_without_data(&self) -> Option<Replay> {
         let host_player = self.players[0].as_ref()?;
         let tag_host_player = self.players[1].as_ref()?;
-        // the second team leader sits at slot 3, its tag member sits at slot 2
         let client_player = self.players[3].as_ref()?;
         let tag_client_player = self.players[2].as_ref()?;
         let seed_sequence = *self.duel.seed();
@@ -245,7 +244,7 @@ impl TagDuel {
         let mut replay = Replay {
             header: ReplayHeader {
                 id: ReplayVersion::V2 as u32,
-                version: crate::PRO_VERSION as u32,
+                version: *crate::plugin::version_check::PRO_VERSION as u32,
                 flag: ReplayHeaderFlags::Uniform | ReplayHeaderFlags::Compressed | ReplayHeaderFlags::Tag,
                 seed: 0,
                 data_size: 0,

@@ -1,3 +1,6 @@
+//! Response codes for RequestField ctos command.
+//! Only needed when reconnect is enabled.
+
 use std::io::Cursor;
 
 use binrw::BinRead;
