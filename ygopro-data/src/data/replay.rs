@@ -228,7 +228,7 @@ impl Replay {
             start_lp: self.start_lp, 
             start_hand: self.start_hand as u8, 
             draw_count: self.draw_count as u8, 
-            time_limit: 999 
+            time_limit: 0 
         }
     }
 }

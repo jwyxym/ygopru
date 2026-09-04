@@ -1,4 +1,20 @@
-//! When plyaer operates in a short time period, this time will be ignored.
+//! Compensate for time lost to quick actions.
+//!
+//! At the start of each turn a player holds a secondary time wallet. Each
+//! operation deposits some time into this wallet. When the player confirms
+//! within a short duration and the wallet has enough balance, the elapsed time
+//! is charged to the wallet instead of the player's `time_limit`. This
+//! encourages quick operations and absorbs network jitter.
+//! 
+//! This plugin is defaultly enabled.
+//!
+//! # Warning
+//!
+//! In the original ygopro the wallet is initialized to the player's
+//! `time_limit`, giving users effectively nearly three times the operation
+//! time. The author considers this unreasonable, so the wallet starts at 0 by
+//! default. Set `initial_time_balance` to `-1` to reproduce the original
+//! behavior.
 //!
 //! # Examples
 //!
@@ -10,13 +26,14 @@
 //! let mut configuration = ygopro::Configuration::default();
 //! configuration.enable_plugin_with_configuration(
 //!     "ygopro::plugin::time_compensator",
-//!     Configuration { add_small_time_deposit_after_operation: 1, ignore_small_time_under_this_duration: 10 },
+//!     Configuration { add_small_time_deposit_after_operation: 1, ignore_small_time_under_this_duration: 10, initial_time_balance: 0 },
 //! );
 //! ```
 
 use linkme::distributed_slice;
 
 use ygopro_data::message::ctos;
+use ygopro_data::message::gm;
 use ygopro_derive::Configuration;
 use ygopro_derive::after;
 use ygopro_derive::before;
@@ -26,6 +43,8 @@ use crate::duel::Duel;
 use crate::duel::PlayerIndex;
 use crate::duel::response_is_meaningful;
 use crate::plugin::time_limit::TimeLimit;
+use crate::ygocore_handlers::Handler as ygocore_handler;
+use crate::ygocore_handlers::YGOCORE_HANDLERS;
 use crate::ygopro_handlers::Handler as ygopro_handler;
 use crate::ygopro_handlers::YGOPRO_HANDLERS;
 
@@ -33,12 +52,19 @@ use crate::ygopro_handlers::YGOPRO_HANDLERS;
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 
+/// Policy for compensating away the time spent on quick operations.
 #[derive(Clone, Configuration)]
 pub struct Configuration {
+    /// Seconds added to the player's compensation deposit for each meaningful operation.
     #[config(default = "1")]
     pub add_small_time_deposit_after_operation: u16,
+    /// Elapsed time below this threshold (in seconds) may be ignored, funded by the compensation deposit.
     #[config(default = "10")]
     pub ignore_small_time_under_this_duration: u16,
+    /// Seconds initially in the wallet at the start of each turn.
+    /// `-1` means the wallet starts with the player's `time_limit`, matching the original ygopro behavior.
+    #[config(default = "0")]
+    pub initial_time_balance: i16,
 }
 
 #[before(ctos::TimeConfirm, priority = 2)]
@@ -68,10 +94,15 @@ fn on_response(duel: &mut Duel, player: PlayerIndex, response: &ctos::Response, 
     }
 }
 
-// #[after(gm::NewTurn)]
-// #[register_to(YGOCORE_HANDLERS as ygocore_handler)]
-// fn on_new_turn(duel: &mut SingleDuel) {
-//     for duel_player in duel.players.iter_mut().flatten() {
-//         duel_player.time_compensator = 0;
-//     }
-// }
+#[after(gm::NewTurn)]
+#[register_to(YGOCORE_HANDLERS as ygocore_handler)]
+fn on_new_turn(duel: &mut Duel, config: Configuration) {
+    let initial_balance = if config.initial_time_balance < 0 {
+        duel.host_info.time_limit
+    } else {
+        config.initial_time_balance as u16
+    };
+    for duel_player in duel.players.iter_mut().flatten() {
+        duel_player.time_compensator = initial_balance;
+    }
+}

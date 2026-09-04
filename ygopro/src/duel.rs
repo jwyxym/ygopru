@@ -1,3 +1,8 @@
+//! Basic duel functionalities.
+//!
+//! 
+//! 
+use std::any::Any;
 use std::io::Cursor;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
@@ -252,7 +257,7 @@ pub enum Request {
     Message(ygopro_handlers::Request),
     MessageEx(ygopro_handlers::RequestEx),
     Evolve,
-    Command { name: &'static str, arguments: [u8; 8] }
+    Command { name: &'static str, arguments: Option<Box<dyn Any + Send>> }
 }
 
 type BaseDuelPlayer = crate::player::BaseDuelPlayer<Complex<stoc::Message>>;
@@ -399,7 +404,7 @@ impl Duel {
         self.request_sender.send(Request::MessageEx( ygopro_handlers::RequestEx { message: message.into(), extra: SendTarget::All } )).ok();
     }
 
-    pub fn queue_command(&self, command: &'static str, args: [u8; 8]) {
+    pub fn queue_command(&self, command: &'static str, args: Option<Box<dyn Any + Send>>) {
         self.request_sender.send(Request::Command { name: command, arguments: args }).ok();
     }
 
@@ -478,7 +483,11 @@ impl Duel {
     pub fn send_game_message(&mut self, message: gm::Message, target: SendTarget, core_transformer: impl CorePlayerToSendTarget + PlayerConverter) {
         if message.waiting_for().is_some() { self.last_select_message = Some(message.clone()); }
         if self.configuration.no_mask {
-            self.sender.send_game_message(message, target, |_| false, core_transformer);
+            let target = match target {
+                SendTarget::Core(player) => core_transformer.transform(player),
+                _ => target,
+            };
+            self.sender.send(stoc::Message::from(message), target);
         } else {
             let can_player_see_unmasked: Vec<bool> = (0u8..(self.max_player_count as u8)).map(|index| !message.should_mask(core_transformer.to_core_player(Netplayer::Player(index)))).collect();
             let mask_judger = move |netplayer: Netplayer| matches!(netplayer, Netplayer::Player(index) if can_player_see_unmasked[index as usize]);

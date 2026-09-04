@@ -1,6 +1,18 @@
 //! Allow join duel on middle of duel.
 //! 
 //! When that happened, server will accept user as observer, and send all history message to that user.
+//! 
+//! # Notes
+//!
+//! These messages are skipped when replaying the history to an observer:
+//! 
+//! - `JoinGame`: the observer will receives its own join response.
+//! - `SelectHand` / `SelectTp`: directed at a specific duelist to pick a hand or turn.
+//! - `TimeLimit`: directed at a duelist's turn timer.
+//! - `ChangeSide`: only relevant during siding, which is not replayed.
+//! - `HandResult`: the hand result is delivered to the duelists, not observers.
+//! - `TeammateSurrender`: specific to a tag-duel team player.
+//! - any `waiting_for` game message: an observer must not be prompted to choose.
 //!
 //! # Examples
 //!
@@ -11,11 +23,15 @@
 //! configuration.enable_plugin("ygopro::plugin::soumatou");
 //! ```
 
+use std::any::Any;
+use std::ops::Deref;
+
 use log::warn;
 
 use ygopro_data::constants::DuelStage;
 use ygopro_data::constants::Netplayer;
 use ygopro_data::message::ctos;
+use ygopro_data::message::gm::GameMessage;
 use ygopro_data::message::stoc;
 
 use ygopro_derive::after;
@@ -36,8 +52,10 @@ pub static NAME: &'static str = module_path!();
 
 #[command]
 #[register_to(crate::command::COMMANDS as crate::command::CommandHandler with &'static str)]
-fn soumatou(duel: &mut Duel, arguments: &[u8; 8]) {
-    let target = Netplayer::Observer(arguments[0]).into();
+fn soumatou(duel: &mut Duel, arguments: &mut Box<dyn Any + Send>) {
+    let Some(target) = arguments.downcast_ref::<Netplayer>().copied() else {
+        return;
+    };
     let duel_start_key = stoc::DuelStart.message_key();
     let directed_keys = [
         stoc::MessageType::JoinGame.message_key(),
@@ -50,7 +68,10 @@ fn soumatou(duel: &mut Duel, arguments: &[u8; 8]) {
     ];
     for message in duel.sender.masked_messages.iter().skip_while(|message| message.message_key() != duel_start_key) {
         if directed_keys.contains(&message.message_key()) { continue; }
-        duel.sender.send_without_record(message.clone(), target);
+        if let stoc::Message::GameMessage(game_message) = message.deref() && game_message.message.waiting_for().is_some() {
+            continue;
+        }
+        duel.sender.send_without_record(message.clone(), target.into());
     }
 }
 
@@ -64,7 +85,7 @@ fn on_join(duel: &mut Duel, player: Netplayer) {
             // which is in current result send to user.
             // so the only way is to make that a command and that
             // will queue after the current response messages.
-            duel.request_sender.send(crate::duel::Request::Command { name: "soumatou", arguments: [index, 0, 0, 0, 0, 0, 0, 0] }).ok();
+            duel.request_sender.send(crate::duel::Request::Command { name: "soumatou", arguments: Some(Box::new(Netplayer::Observer(index))) }).ok();
         }
     }
 }

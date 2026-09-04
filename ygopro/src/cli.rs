@@ -2,7 +2,7 @@
 //!
 //! # Examples
 //!
-//! Just like what [`main`](crate::main) do:
+//! Just like what `main` do:
 //!
 //! ```rust,no_run
 //! use ygopro::cli::*;
