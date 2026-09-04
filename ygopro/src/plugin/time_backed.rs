@@ -1,4 +1,18 @@
 //! When player operates, the server will add some time to that player.
+//!
+//! # Examples
+//!
+//! Enable the module with a custom time-back policy:
+//!
+//! ```
+//! use ygopro::plugin::time_backed::Configuration;
+//!
+//! let mut configuration = ygopro::Configuration::default();
+//! configuration.enable_plugin_with_configuration(
+//!     "ygopro::plugin::time_backed",
+//!     Configuration { add_time_after_operation: 1, max_add_time_each_turn: 600 },
+//! );
+//! ```
 
 use linkme::distributed_slice;
 
@@ -13,6 +27,7 @@ use crate::duel::response_is_meaningful;
 use crate::duel::PlayerIndex;
 use crate::ygopro_handlers::Handler;
 
+/// Name for activitating this module in the plugin system.
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 

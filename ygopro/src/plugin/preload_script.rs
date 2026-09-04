@@ -1,5 +1,20 @@
 //! Extra scripts preloaded into every duel after creation.
+//! 
 //! It is often for loading server-limited special rules.
+//!
+//! # Examples
+//!
+//! Enable the module with a custom list of scripts:
+//!
+//! ```
+//! use ygopro::plugin::preload_script::Configuration;
+//!
+//! let mut configuration = ygopro::Configuration::default();
+//! configuration.enable_plugin_with_configuration(
+//!     "ygopro::plugin::preload_script",
+//!     Configuration { preloaded_scripts: vec!["./script/my_fantastic_rule.lua".to_string()] },
+//! );
+//! ```
 
 use linkme::distributed_slice;
 
@@ -12,6 +27,7 @@ use ygopro_derive::register_to;
 use crate::duel::Duel;
 use crate::ygopro_handlers::Handler;
 
+/// Name for activitating this module in the plugin system.
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 

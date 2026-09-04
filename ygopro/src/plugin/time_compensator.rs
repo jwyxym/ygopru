@@ -1,4 +1,18 @@
 //! When plyaer operates in a short time period, this time will be ignored.
+//!
+//! # Examples
+//!
+//! Enable the module with a custom compensation policy:
+//!
+//! ```
+//! use ygopro::plugin::time_compensator::Configuration;
+//!
+//! let mut configuration = ygopro::Configuration::default();
+//! configuration.enable_plugin_with_configuration(
+//!     "ygopro::plugin::time_compensator",
+//!     Configuration { add_small_time_deposit_after_operation: 1, ignore_small_time_under_this_duration: 10 },
+//! );
+//! ```
 
 use linkme::distributed_slice;
 
@@ -15,6 +29,7 @@ use crate::plugin::time_limit::TimeLimit;
 use crate::ygopro_handlers::Handler as ygopro_handler;
 use crate::ygopro_handlers::YGOPRO_HANDLERS;
 
+/// Name for activitating this module in the plugin system.
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 

@@ -1,5 +1,7 @@
 //! Response codes for RequestField ctos command.
+//! 
 //! Only needed when reconnect is enabled.
+//! This plugin is defaultly enabled.
 
 use std::io::Cursor;
 
@@ -29,6 +31,7 @@ use crate::tag_duel::ygopro_handlers::Handler as TagDuelYgoproHandler;
 use crate::ygocore_handlers::YGOCORE_HANDLERS;
 use crate::ygocore_handlers::Handler as YgocoreHandler;
 
+/// Name for activitating this module in the plugin system.
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 

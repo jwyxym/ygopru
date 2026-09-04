@@ -1,4 +1,19 @@
 //! Toolkits for starting ygopro as a local server.
+//!
+//! # Examples
+//!
+//! Just like what [`main`](crate::main) do:
+//!
+//! ```rust,no_run
+//! use ygopro::cli::*;
+//!
+//! # async fn run() {
+//! let args = std::env::args().collect::<Vec<String>>();
+//! let (port, hostinfo, replay_mode, pre_seeds) = parse_cli_args(args).unwrap();
+//! let duel = build_duel_host(hostinfo, replay_mode, pre_seeds);
+//! start_local_server(port, duel).await;
+//! # }
+//! ```
 
 use std::io::Cursor;
 
@@ -23,8 +38,11 @@ use crate::host::DuelHost;
 /// Error type for command line argument parsing.
 #[derive(Debug)]
 pub enum CliError {
+    /// Params is not enough or too many.
     BadParamCount,
+    // Cannot parse port number.
     InvalidPort(String),
+    // Cannot decode seed.
     InvalidSeed(String),
 }
 
@@ -41,6 +59,15 @@ impl std::fmt::Display for CliError {
 impl std::error::Error for CliError {}
 
 /// Parse command line arguments and return the port, host info, replay mode, and pre-seeds.
+///
+/// # Examples
+///
+/// ```
+/// use ygopro::cli::parse_cli_args;
+///
+/// let (port, hostinfo, replay_mode, pre_seeds) = parse_cli_args(vec!["ygopro".to_string(), "2334".to_string()]).unwrap();
+/// assert_eq!(port, 2334);
+/// ```
 pub fn parse_cli_args(args: Vec<String>) -> Result<(u16, HostInfo, ReplayMode, Vec<[u32; SEED_COUNT]>), CliError> {
     if args.len() > 2 && args.len() < 13 {
         return Err(CliError::BadParamCount);
@@ -94,6 +121,16 @@ fn decode_seed(seed_arg: &str) -> Result<[u32; SEED_COUNT], CliError> {
 }
 
 /// Build a [`DuelHost`] from host info, replay mode, and pre-seeds.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use ygopro::cli::build_duel_host;
+/// use ygopro_data::message::HostInfo;
+/// use ygopro_data::data::ReplayMode;
+///
+/// let duel = build_duel_host(HostInfo::default(), ReplayMode::empty(), Vec::new());
+/// ```
 pub fn build_duel_host(hostinfo: HostInfo, replay_mode: ReplayMode, pre_seeds: Vec<[u32; SEED_COUNT]>) -> DuelHost {
     let mut configuration = Configuration::default();
     configuration.seed_generator = Some(Box::new(move |duel_count: u8| {
@@ -107,13 +144,25 @@ pub fn build_duel_host(hostinfo: HostInfo, replay_mode: ReplayMode, pre_seeds: V
 }
 
 /// Start a one-shot local server on a fixed port with an built [`DuelHost`].
-pub async fn start_local_server(port: u16, duel: DuelHost) {
+///
+/// # Examples
+/// 
+/// ```rust,no_run
+/// use ygopro::cli::{build_duel_host, start_local_server};
+/// use ygopro_data::message::HostInfo;
+/// use ygopro_data::data::ReplayMode;
+///
+/// # async fn run() {
+/// let duel = build_duel_host(HostInfo::default(), ReplayMode::empty(), Vec::new());
+/// start_local_server(0, duel).await;
+/// # }
+/// ```
+pub async fn start_local_server(port: u16, mut duel: impl RoomProvider<ctos::Message, Complex<stoc::Message>> + Send + 'static) {
     let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await.expect("Failed to bind to port");
     let port = listener.local_addr().expect("Failed to get random port").port();
     println!("{port}");
     log::info!("listening on port {port}");
-    let mut duel = duel;
-    let finish_signal = <DuelHost as RoomProvider<ctos::Message, Complex<stoc::Message>>>::get_finish_signal(&mut duel);
+    let finish_signal = duel.get_finish_signal();
 
     tokio::spawn(async move {
         loop {

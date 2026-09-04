@@ -1,6 +1,6 @@
 [package]
 name = "ygopro"
-version = "1.36.2-rs.0"
+version = "1.36.2-rs.1"
 edition = "2024"
 
 [lib]

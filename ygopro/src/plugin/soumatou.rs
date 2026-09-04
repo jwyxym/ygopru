@@ -1,5 +1,15 @@
 //! Allow join duel on middle of duel.
+//! 
 //! When that happened, server will accept user as observer, and send all history message to that user.
+//!
+//! # Examples
+//!
+//! Enable the module:
+//!
+//! ```
+//! let mut configuration = ygopro::Configuration::default();
+//! configuration.enable_plugin("ygopro::plugin::soumatou");
+//! ```
 
 use log::warn;
 
@@ -21,6 +31,7 @@ use crate::ygopro_handlers::Response;
 use crate::ygopro_handlers::YGOPRO_HANDLERS;
 use crate::ygopro_handlers::YGOPRO_HANDLERS_EX;
 
+/// Name for activitating this module in the plugin system.
 pub static NAME: &'static str = module_path!();
 
 #[command]

@@ -8,8 +8,11 @@
 //! ```rust,no_run
 //! let mut configuration = ygopro::Configuration::default();
 //! configuration.enable_plugin("ygopro::plugin::soumatou");
-//! let mut duel_host = ygopro::host::DuelHost::new(Default::default(), configuration);
-//! // start duel_host ...
+//! let duel_host = ygopro::host::DuelHost::new(Default::default(), configuration);
+//! // or start it directly with the cli toolkits:
+//! # async fn run() {
+//! ygopro::cli::start_local_server(0, duel_host).await;
+//! # }
 //! ```
 
 use crate::plugin::*;

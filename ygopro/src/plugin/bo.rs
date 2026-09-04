@@ -1,4 +1,19 @@
-/// Replace the default best-of-3 rule with a custom best-of-N rule.
+//! Replace the default best-of-3 rule with a custom best-of-N rule.
+//!
+//! # Examples
+//!
+//! Enable the module with a best-of-5 rule:
+//!
+//! ```
+//! use ygopro::plugin::bo::Configuration;
+//!
+//! let mut configuration = ygopro::Configuration::default();
+//! configuration.enable_plugin_with_configuration(
+//!     "ygopro::plugin::bo",
+//!     Configuration { override_best_of: 5 },
+//! );
+//! ```
+
 
 use ygopro_derive::Configuration;
 use ygopro_derive::after;
@@ -11,6 +26,7 @@ use crate::single_duel::ygopro_handlers::HandlerEx;
 use crate::single_duel::ygopro_handlers::SINGLE_DUEL_YGOPRO_HANDLERS_EX;
 use crate::ygopro_handlers::Response;
 
+/// Name for activitating this module in the plugin system.
 pub static NAME: &'static str = module_path!();
 
 #[derive(Clone, Configuration)]

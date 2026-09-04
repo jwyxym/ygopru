@@ -477,9 +477,13 @@ impl Duel {
 
     pub fn send_game_message(&mut self, message: gm::Message, target: SendTarget, core_transformer: impl CorePlayerToSendTarget + PlayerConverter) {
         if message.waiting_for().is_some() { self.last_select_message = Some(message.clone()); }
-        let can_player_see_unmasked: Vec<bool> = (0u8..(self.max_player_count as u8)).map(|index| !message.should_mask(core_transformer.to_core_player(Netplayer::Player(index)))).collect();
-        let mask_judger = move |netplayer: Netplayer| matches!(netplayer, Netplayer::Player(index) if can_player_see_unmasked[index as usize]);
-        self.sender.send_game_message(message, target, mask_judger, core_transformer);
+        if self.configuration.no_mask {
+            self.sender.send_game_message(message, target, |_| false, core_transformer);
+        } else {
+            let can_player_see_unmasked: Vec<bool> = (0u8..(self.max_player_count as u8)).map(|index| !message.should_mask(core_transformer.to_core_player(Netplayer::Player(index)))).collect();
+            let mask_judger = move |netplayer: Netplayer| matches!(netplayer, Netplayer::Player(index) if can_player_see_unmasked[index as usize]);
+            self.sender.send_game_message(message, target, mask_judger, core_transformer);
+        }
     }
 
     pub fn refresh(&mut self, player: CorePlayer, locations: Location, sequence: i8, query: Query, core_transformer: impl CorePlayerToSendTarget + PlayerConverter + Clone) {

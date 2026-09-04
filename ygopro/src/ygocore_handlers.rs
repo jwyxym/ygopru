@@ -1,3 +1,10 @@
+//! ygocore game_message Handlers for [`Duel`].
+//! 
+//! This module contains handlers for message from ygocore, and decide following things: 
+//! - Sending this message to which player(s), default All player.
+//! - Refreshing which field or card after this message.
+//! 
+//! Masking message is the internal logic of message itself, and these handlers won't process.
 
 use std::io::Cursor;
 
@@ -22,6 +29,7 @@ pub type Request = ygopro_handler::extract::Request<gm::Message, Netplayer>;
 pub type State = ygopro_handlers::State<crate::duel::Duel>;
 pub type Handler = ygopro_handler::sync_handler::SyncHandler<Request, State, Response>;
 
+/// Response type that
 pub struct Response {
     pub target: SendTarget,
     pub refresh: (CorePlayer, Location, i8, Query)

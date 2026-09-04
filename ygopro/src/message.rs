@@ -1,3 +1,25 @@
+//! Internal messages (MessageEx) exchanged inside the duel actor.
+//!
+//! These hook into and alter parts of ygopro's behavior without occupying the message flags of the
+//! ygopro protocol. They are only exchanged inside the duel actor and are never sent over the network.
+//! 
+//! It can be understand as extra `stoc::Message`.
+//!
+//! The duel start is driven by this chain:
+//!
+//! ```text
+//! TpResult -> FirstShuffle
+//!          -> DuelInit -> DuelStart -> Evolve
+//! ```
+//!
+//! The duel end is driven by this chain:
+//!
+//! ```text
+//! DuelEnd -> GenerateReplay
+//!         -> JudgeContinueMatch -> RecreateDuel   (match continues)
+//!                               -> MatchEnd       (match ends)
+//! ```
+
 use log::warn;
 use tokio::sync::mpsc;
 
@@ -10,6 +32,9 @@ use crate::duel::Duel;
 use crate::duel::SendTarget;
 
 
+/// Attach a new client to the room.
+///
+/// Sent when a new client connects.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 1)]
 pub struct ClientJoin {
@@ -29,18 +54,30 @@ where Extra: Send, State: Send, Res: Send,
     }
 }
 
+/// Shuffle both players' decks in first-attack order.
+///
+/// Sent when the duel starts, right after `TpResult`.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 2)]
 pub struct FirstShuffle;
 
+/// Load both decks into the core with new_card.
+///
+/// Sent when both decks are ready, before the duel starts.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 3)]
 pub struct DuelInit;
 
+/// Send init field info (deck + extra), then evolve the ygocore.
+///
+/// Sent after both decks are loaded into the core.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 4)]
 pub struct DuelStart;
 
+/// Signal the end of a duel.
+///
+/// Sent when a duel is ended.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 10)]
 pub struct DuelEnd {
@@ -48,28 +85,46 @@ pub struct DuelEnd {
     pub reason: WinReason
 }
 
+/// Generate and send the replay.
+///
+/// Sent when duel is about to end.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 11)]
 pub struct GenerateReplay;
 
+/// Decide whether the match should continue. Continue leads to [`RecreateDuel`], terminate to [`MatchEnd`].
+/// 
+/// Sent when duel ends.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 12)]
 pub struct JudgeContinueMatch;
 
+/// Enter siding, reset player states and recreate the ygocore duel.
+///
+/// Sent when the match should continue.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 13)]
 pub struct RecreateDuel;
 
+/// Signal the end of a match.
+///
+/// Sent when a match is ended.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 20)]
 pub struct MatchEnd;
 
+/// Report a player's timeout.
+///
+/// Sent when a player's time runs out.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 21)]
 pub struct Timeout {
     pub player: crate::duel::PlayerIndex,
 }
 
+/// Terminate the room.
+///
+/// Sent when the room is dropped.
 #[derive(Debug, Message)]
 #[message(ygopro, flag = 255)]
 pub struct Terminate;

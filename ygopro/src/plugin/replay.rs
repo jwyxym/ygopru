@@ -1,3 +1,19 @@
+//! Control how replays are distributed or stored.
+//!
+//! # Examples
+//!
+//! Enable the module with a replay mode:
+//!
+//! ```
+//! use ygopro::plugin::replay::Configuration;
+//!
+//! let mut configuration = ygopro::Configuration::default();
+//! configuration.enable_plugin_with_configuration(
+//!     "ygopro::plugin::replay",
+//!     Configuration { mode: ygopro_data::data::ReplayMode::WatcherNoSend },
+//! );
+//! ```
+
 use linkme::distributed_slice;
 use log::warn;
 
@@ -11,6 +27,7 @@ use crate::duel::SendTarget;
 use crate::ygopro_handlers::HandlerEx;
 use crate::ygopro_handlers::YGOPRO_HANDLERS_EX;
 
+/// Name for activitating this module in the plugin system.
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 

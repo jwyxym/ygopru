@@ -1,6 +1,21 @@
 //! Room termination policy.
+//! 
 //! ygopro exits when all players leave, but in server scenarios, we want to terminate
 //! the instance when duel ends. That plugin help set the termination policy for a room.
+//!
+//! # Examples
+//!
+//! Enable the module and terminate when all players leave:
+//!
+//! ```
+//! use ygopro::plugin::terminate::Configuration;
+//!
+//! let mut configuration = ygopro::Configuration::default();
+//! configuration.enable_plugin_with_configuration(
+//!     "ygopro::plugin::terminate",
+//!     Configuration { terminate_when: ygopro::duel::SendTarget::AllPlayer, terminate_when_match_end: true },
+//! );
+//! ```
 
 use log::warn;
 use linkme::distributed_slice;
@@ -21,6 +36,7 @@ use crate::ygopro_handlers::HandlerEx;
 use crate::ygopro_handlers::YGOPRO_HANDLERS;
 use crate::ygopro_handlers::YGOPRO_HANDLERS_EX;
 
+/// Name for activitating this module in the plugin system.
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 

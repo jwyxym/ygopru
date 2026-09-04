@@ -1,6 +1,7 @@
-/// ygopro, rewritten in rust version.
-/// Here should be some very big readme.
-/// 
+//! YGOPro, rewritten in rust version.
+//! 
+//! Here should be some very big readme.
+
 pub mod single_duel;
 pub mod tag_duel;
 pub mod duel;

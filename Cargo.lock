@@ -1708,7 +1708,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "ygopro"
-version = "1.36.2-rs.0"
+version = "1.36.2-rs.1"
 dependencies = [
  "anymap3",
  "arc-swap",

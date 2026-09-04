@@ -1,5 +1,15 @@
 //! Limit player's duel time.
 //! 
+//! That's an internal 
+//!
+//! # Examples
+//!
+//! Enable the module:
+//!
+//! ```
+//! let mut configuration = ygopro::Configuration::default();
+//! configuration.enable_plugin("ygopro::plugin::time_limit");
+//! ```
 
 use linkme::distributed_slice;
 use log::warn;
@@ -29,6 +39,7 @@ use crate::ygopro_handlers::HandlerEx as YgoproHandlerEx;
 use crate::ygopro_handlers::YGOPRO_HANDLERS;
 use crate::ygopro_handlers::YGOPRO_HANDLERS_EX;
 
+/// Name for activitating this module in the plugin system.
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 

@@ -1,3 +1,8 @@
+//! Manage global information
+//!
+//! manager is a mapping to origin manager.cpp.
+
+/// Manage card info
 pub mod data_manager {
     use std::cell::RefCell;
     use std::ffi::c_char;
@@ -253,6 +258,7 @@ pub mod data_manager {
     }
 }
 
+/// Manage info from `strings.conf`.
 pub mod i18n {
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -272,6 +278,7 @@ pub mod i18n {
     }
 }
 
+/// Manage info from `lflists.conf`
 pub mod deck_manager {
     use std::collections::HashMap;
     use std::fs;
@@ -358,6 +365,7 @@ pub mod deck_manager {
     }
 }
 
+/// Manage info from `system.conf`
 pub mod config_manager {
     use std::fs;
     use std::io;

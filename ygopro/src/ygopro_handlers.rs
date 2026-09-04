@@ -1,3 +1,5 @@
+//! ctos <-> stoc Handlers for [`Duel`].
+
 use std::io::Cursor;
 use std::ops::{Deref, DerefMut};
 
@@ -16,6 +18,7 @@ use crate::duel::*;
 use crate::managers::*;
 use crate::player::AllowMessage;
 
+/// Name for activitating this module in the plugin system.
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 
@@ -416,16 +419,7 @@ fn on_leave_game(duel: &mut Duel, player: Netplayer) -> bool {
                 }.into();
                 duel.sender.send(leave_message, SendTarget::All);
             } else {
-                // if duel.stage == DuelStage::Siding {
-                //     duel.sender.send(stoc::DuelStart.into(), SendTarget::AllPlayer);
-                // }
-                // // a leave after the duel already ended must not announce a second win.
-                // if duel.stage != DuelStage::End && !duel.ended {
-                //     let leaving_index = PlayerIndex::from(leaving_netplayer);
-                //     let loser = duel.to_core_player(leaving_index);
-                //     duel.sender.send(gm::Win { winner: loser.opponent(), reason: WinReason::OpponentLeave }.into(), SendTarget::All);
-                //     duel.queue_request_ex(ygopro::DuelEnd { winner: loser.opponent(), reason: WinReason::OpponentLeave });
-                // }
+                // when player leave during duel, we will need to send the Win info, so this part will be put in subclass of Duel.
             }
             duel.players[leaving_netplayer as usize] = None;
             duel.sender.clear_player(leaving_netplayer as usize);
@@ -620,12 +614,8 @@ fn on_client_join_final(join: &mut ygopro::ClientJoin) {
     }
 }
 
-// #[handler(ygopro::GenerateReplay)]
-// #[register_to(YGOPRO_HANDLERS_EX as HandlerEx)]
+// Replay always start with the first Attack player. So we cannot produce replay here.
 // fn on_generate_replay(duel: &mut Duel) -> Option<stoc::Message> {
-//     let mut replay = duel.create_replay_without_data()?;
-//     replay.body.datas = duel.client_responses.clone().into_iter().map(|r| r.response.into()).collect();
-//     Some(stoc::Replay { replay: Box::new(replay) }.into())
 // }
 
 #[handler(ygopro::DuelEnd)]

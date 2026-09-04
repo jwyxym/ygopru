@@ -1,4 +1,10 @@
 
+//! Player abstracts the data stream input into a duel.
+//!
+//! A player wraps the [`ctos::Message`] receive channel together with the state needed to drive
+//! a duel, such as which messages are currently allowed. [`BaseDuelPlayer`] is the raw receiver
+//! plus a message filter, and [`DuelPlayer`] adds the per-duel state (deck, time, readiness).
+
 use std::ops::{Deref, DerefMut};
 
 use tokio::sync::mpsc;
@@ -8,6 +14,7 @@ use ygopro_data::data::*;
 use ygopro_data::message::ctos;
 use ygopro_data::string::FixedLengthString;
 
+/// Whether a given [`ctos::Message`] is allowed to be passed in by the player.
 pub enum AllowMessage {
     None,
     Any,
@@ -48,6 +55,7 @@ impl From<u8> for AllowMessage {
     }
 }
 
+/// The raw player: just a [`ctos::Message`] sender channel plus the current message filter.
 pub struct BaseDuelPlayer<Message> {
     pub name: FixedLengthString<20>,
     pub stoc_sender: mpsc::UnboundedSender<Message>,
@@ -68,6 +76,7 @@ impl<Message> AsMut<BaseDuelPlayer<Message>> for BaseDuelPlayer<Message> {
     fn as_mut(&mut self) -> &mut BaseDuelPlayer<Message> { self }
 }
 
+/// A player in a duel, adding the per-duel state on top of [`BaseDuelPlayer`].
 pub struct DuelPlayer<Message> {
     pub player: BaseDuelPlayer<Message>,
     pub ready: bool,
