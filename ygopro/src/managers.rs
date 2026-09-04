@@ -5,10 +5,11 @@
 /// Manage card info
 pub mod data_manager {
     use std::cell::RefCell;
+    use std::ffi::CStr;
     use std::ffi::c_char;
     use std::ffi::c_int;
-    use std::ffi::CStr;
     use std::fs;
+    use std::path::Path;
     use std::sync::Arc;
     use std::sync::LazyLock;
 
@@ -22,7 +23,8 @@ pub mod data_manager {
     thread_local! {
         static SCRIPT_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(0x20000));
     }
-    static GLOBAL_DATA_MANAGER: LazyLock<ArcSwap<DataManager>> = LazyLock::new(|| ArcSwap::from_pointee(DataManager::new()));
+    static GLOBAL_DATA_MANAGER: LazyLock<ArcSwap<DataManager>> =
+        LazyLock::new(|| ArcSwap::from_pointee(DataManager::new()));
 
     pub fn set_global(data_manager: DataManager) {
         GLOBAL_DATA_MANAGER.store(Arc::new(data_manager));
@@ -38,10 +40,13 @@ pub mod data_manager {
 
     pub fn init() {
         let mut data_manager = DataManager::new();
-        #[cfg(feature = "card")]
+        #[cfg(all(feature = "card", not(feature = "ygomobile_support")))]
         {
             let config_manager = super::config_manager::load();
-            let db_path = config_manager.get("db_path").unwrap_or("cards.cdb, expansions/*.cdb").to_string();
+            let db_path = config_manager
+                .get("db_path")
+                .unwrap_or("cards.cdb, expansions/*.cdb")
+                .to_string();
 
             for db_pattern in super::config_manager::split_paths(&db_path) {
                 let Ok(entries) = glob::glob(db_pattern) else {
@@ -49,28 +54,88 @@ pub mod data_manager {
                     continue;
                 };
                 for entry in entries {
-                    let path = entry.map_err(|err| log::warn!("Failed to read glob entry {}: {:?}", db_pattern, err)).ok();
+                    let path = entry
+                        .map_err(|err| {
+                            log::warn!("Failed to read glob entry {}: {:?}", db_pattern, err)
+                        })
+                        .ok();
                     if let Some(path) = path {
                         #[cfg(feature = "zip")]
-                        if let Some(bytes) = crate::ypk::archive_manager::read_file(&path.to_string_lossy()) {
-                            data_manager.load_db_from_bytes(&bytes)
+                        if let Some(bytes) =
+                            crate::ypk::archive_manager::read_file(&path.to_string_lossy())
+                        {
+                            data_manager
+                                .load_db_from_bytes(&bytes)
                                 .map(|()| log::trace!("Loaded database {}", path.display()))
-                                .map_err(|err| log::warn!("Failed to load database {}: {:?}", path.display(), err)).ok();
+                                .map_err(|err| {
+                                    log::warn!(
+                                        "Failed to load database {}: {:?}",
+                                        path.display(),
+                                        err
+                                    )
+                                })
+                                .ok();
                         }
                         #[cfg(not(feature = "zip"))]
-                        data_manager.load_db(&path.to_string_lossy())
+                        data_manager
+                            .load_db(&path.to_string_lossy())
                             .map(|()| log::trace!("Loaded database {}", path.display()))
-                            .map_err(|err| log::warn!("Failed to load database {}: {:?}", path.display(), err)).ok();
+                            .map_err(|err| {
+                                log::warn!("Failed to load database {}: {:?}", path.display(), err)
+                            })
+                            .ok();
                     }
                 }
             }
         }
+
+        #[cfg(all(feature = "card", feature = "ygomobile_support"))]
+        {
+            use std::path::PathBuf;
+            use walkdir::WalkDir;
+
+            let path: String = super::config_manager::load()
+                .get_or("path", "./")
+                .to_string();
+            let path: &Path = Path::new(&path);
+            let db_path: PathBuf = path.join("cards.cdb");
+            let expansions_path: PathBuf = path.join("expansions");
+
+            data_manager
+                .load_db(&db_path.to_string_lossy())
+                .map(|()| log::trace!("Loaded database {}", db_path.display()))
+                .map_err(|err| {
+                    log::warn!("Failed to load database {}: {:?}", db_path.display(), err)
+                })
+                .ok();
+            WalkDir::new(expansions_path)
+                .max_depth(1)
+                .into_iter()
+                .for_each(|i| {
+                    if let Ok(i) = i {
+                        let p: &Path = i.path();
+                        if let Some(name) = p.file_name().and_then(|n| n.to_str())
+                            && name.ends_with(".cdb")
+                        {
+                            data_manager
+                                .load_db(&p.to_string_lossy())
+                                .map(|()| log::trace!("Loaded database {}", name))
+                                .map_err(|err| {
+                                    log::warn!("Failed to load database {}: {:?}", name, err)
+                                })
+                                .ok();
+                        }
+                    }
+                });
+        }
         #[cfg(all(feature = "card", feature = "zip"))]
         for cdb_name in crate::ypk::archive_manager::cdb_names() {
             if let Some(bytes) = crate::ypk::archive_manager::read_file(&cdb_name) {
-                data_manager.load_db_from_bytes(&bytes)
+                data_manager
+                    .load_db_from_bytes(&bytes)
                     .map(|()| log::trace!("Loaded database {}", cdb_name))
-                    .map_err(|err| log::warn!("Failed to load database {}: {:?}", cdb_name, err)).ok();
+                    .map_err(|err| log::warn!("Failed to load database {}: {:?}", cdb_name, err))
+                    .ok();
             }
         }
         data_manager.finalize_db();
@@ -82,7 +147,9 @@ pub mod data_manager {
 
     #[cfg(feature = "card")]
     fn is_alternative(code: u32, alias: u32) -> bool {
-        alias != 0 && alias < code + CARD_ARTWORK_VERSIONS_OFFSET && code < alias + CARD_ARTWORK_VERSIONS_OFFSET
+        alias != 0
+            && alias < code + CARD_ARTWORK_VERSIONS_OFFSET
+            && code < alias + CARD_ARTWORK_VERSIONS_OFFSET
     }
 
     pub struct DataManager {
@@ -140,7 +207,10 @@ pub mod data_manager {
                 .cards
                 .iter()
                 .filter_map(|(&code, card)| {
-                    if card.rule_code != 0 || card.alias == 0 || card.card_type.contains(Type::Token) {
+                    if card.rule_code != 0
+                        || card.alias == 0
+                        || card.card_type.contains(Type::Token)
+                    {
                         return None;
                     }
                     Some((code, card.alias))
@@ -155,7 +225,9 @@ pub mod data_manager {
             }
 
             for (code, list) in &self.extra_setcode {
-                if list.is_empty() || list.len() > 16 { continue; }
+                if list.is_empty() || list.len() > 16 {
+                    continue;
+                }
                 if let Some(card) = self.cards.get_mut(code) {
                     for (i, &sc) in list.iter().enumerate() {
                         card.setcode[i] = sc;
@@ -179,15 +251,19 @@ pub mod data_manager {
         }
         let guard = GLOBAL_DATA_MANAGER.load();
         if let Some(card) = guard.get_core_card(code) {
-            unsafe { *data = card.clone(); }
+            unsafe {
+                *data = card.clone();
+            }
             return 0;
         }
-        unsafe { *data = CoreCard::default(); }
+        unsafe {
+            *data = CoreCard::default();
+        }
         0
     }
 
     pub extern "C" fn script_reader(script_path: *const c_char, slen: *mut c_int) -> *mut u8 {
-        fn read_file(file_path: &str, buffer: &mut Vec<u8>) -> Option<usize> {
+        fn read_file<P: AsRef<Path>>(file_path: P, buffer: &mut Vec<u8>) -> Option<usize> {
             fs::read(file_path).ok().and_then(|data| {
                 buffer.resize(data.len(), 0);
                 buffer[..data.len()].copy_from_slice(&data);
@@ -206,49 +282,70 @@ pub mod data_manager {
         if script_path.is_null() || slen.is_null() {
             return std::ptr::null_mut();
         }
-        let path = unsafe { CStr::from_ptr(script_path).to_string_lossy() };
+        let script = unsafe { CStr::from_ptr(script_path).to_string_lossy() };
         SCRIPT_BUFFER.with(|buffer| {
             let mut buffer = buffer.borrow_mut();
 
-            if !path.starts_with("./script") {
-                if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
-                    unsafe { *slen = len as c_int; }
+            if !script.starts_with("./script") {
+                if let Some(len) = read_file(script.as_ref(), &mut *buffer) {
+                    unsafe {
+                        *slen = len as c_int;
+                    }
                     return buffer.as_mut_ptr();
                 }
-                return std::ptr::null_mut();
             }
 
-            let script_name = &path[2..];
-            let expansions_path = format!("./expansions/{}", script_name);
+            let base_path = super::config_manager::load()
+                .get_or("path", "./")
+                .to_string();
+            let base_path = Path::new(&base_path);
+            let script_name = script.strip_prefix("./").unwrap_or(script.as_ref());
+            let script_path = base_path.join(script_name);
+            let expansions_path = base_path.join("expansions").join(script_name);
             let config_manager = super::config_manager::load();
-            let prefer_expansion_script = config_manager.get("prefer_expansion_script").map(|value| value.trim() != "0").unwrap_or(false);
+            let prefer_expansion_script = config_manager
+                .get("prefer_expansion_script")
+                .map(|value| value.trim() != "0")
+                .unwrap_or(false);
 
             if prefer_expansion_script {
                 if let Some(len) = read_file(&expansions_path, &mut *buffer) {
-                    unsafe { *slen = len as c_int; }
+                    unsafe {
+                        *slen = len as c_int;
+                    }
                     return buffer.as_mut_ptr();
                 }
                 #[cfg(feature = "zip")]
                 if let Some(len) = read_archive(script_name, &mut *buffer) {
-                    unsafe { *slen = len as c_int; }
+                    unsafe {
+                        *slen = len as c_int;
+                    }
                     return buffer.as_mut_ptr();
                 }
-                if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
-                    unsafe { *slen = len as c_int; }
+                if let Some(len) = read_file(&script_path, &mut *buffer) {
+                    unsafe {
+                        *slen = len as c_int;
+                    }
                     return buffer.as_mut_ptr();
                 }
             } else {
                 #[cfg(feature = "zip")]
                 if let Some(len) = read_archive(script_name, &mut *buffer) {
-                    unsafe { *slen = len as c_int; }
+                    unsafe {
+                        *slen = len as c_int;
+                    }
                     return buffer.as_mut_ptr();
                 }
-                if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
-                    unsafe { *slen = len as c_int; }
+                if let Some(len) = read_file(&script_path, &mut *buffer) {
+                    unsafe {
+                        *slen = len as c_int;
+                    }
                     return buffer.as_mut_ptr();
                 }
                 if let Some(len) = read_file(&expansions_path, &mut *buffer) {
-                    unsafe { *slen = len as c_int; }
+                    unsafe {
+                        *slen = len as c_int;
+                    }
                     return buffer.as_mut_ptr();
                 }
             }
@@ -266,7 +363,8 @@ pub mod i18n {
 
     use arc_swap::ArcSwap;
 
-    static GLOBAL_STRINGS: LazyLock<ArcSwap<HashMap<String, HashMap<i32, String>>>> = LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
+    static GLOBAL_STRINGS: LazyLock<ArcSwap<HashMap<String, HashMap<i32, String>>>> =
+        LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
 
     pub fn set_strings(strings: HashMap<String, HashMap<i32, String>>) {
         GLOBAL_STRINGS.store(Arc::new(strings));
@@ -288,10 +386,11 @@ pub mod deck_manager {
 
     use arc_swap::ArcSwap;
 
-    use ygopro_data::data::parse_lflist_content;
     use ygopro_data::data::LFList;
+    use ygopro_data::data::parse_lflist_content;
 
-    static GLOBAL_DECK_MANAGER: LazyLock<ArcSwap<DeckManager>> = LazyLock::new(|| ArcSwap::from_pointee(DeckManager::new()));
+    static GLOBAL_DECK_MANAGER: LazyLock<ArcSwap<DeckManager>> =
+        LazyLock::new(|| ArcSwap::from_pointee(DeckManager::new()));
 
     pub fn set_global(deck_manager: DeckManager) {
         GLOBAL_DECK_MANAGER.store(Arc::new(deck_manager));
@@ -302,22 +401,74 @@ pub mod deck_manager {
     }
 
     pub fn init() {
-        let config_manager = super::config_manager::load();
-        let lflist_path = config_manager.get("lflist_path").unwrap_or("expansions/lflist.conf, lflist.conf").to_string();
-
         let mut deck_manager = DeckManager::new();
-        for lflist_pattern in super::config_manager::split_paths(&lflist_path) {
-            let Ok(entries) = glob::glob(lflist_pattern) else {
-                log::warn!("Failed to parse glob {}", lflist_pattern);
-                continue;
-            };
-            for entry in entries {
-                let path = entry.map_err(|err| log::warn!("Failed to read glob entry {}: {:?}", lflist_pattern, err)).ok();
-                if let Some(path) = path {
-                    deck_manager.load_lflist(&path.to_string_lossy())
-                        .map_err(|err| log::warn!("Failed to read lflist {}: {:?}", path.display(), err)).ok();
+        #[cfg(not(feature = "ygomobile_support"))]
+        {
+            let config_manager = super::config_manager::load();
+            let lflist_path = config_manager
+                .get("lflist_path")
+                .unwrap_or("expansions/lflist.conf, lflist.conf")
+                .to_string();
+
+            for lflist_pattern in super::config_manager::split_paths(&lflist_path) {
+                let Ok(entries) = glob::glob(lflist_pattern) else {
+                    log::warn!("Failed to parse glob {}", lflist_pattern);
+                    continue;
+                };
+                for entry in entries {
+                    let path = entry
+                        .map_err(|err| {
+                            log::warn!("Failed to read glob entry {}: {:?}", lflist_pattern, err)
+                        })
+                        .ok();
+                    if let Some(path) = path {
+                        deck_manager
+                            .load_lflist(&path.to_string_lossy())
+                            .map_err(|err| {
+                                log::warn!("Failed to read lflist {}: {:?}", path.display(), err)
+                            })
+                            .ok();
+                    }
                 }
             }
+        }
+
+        #[cfg(feature = "ygomobile_support")]
+        {
+            use std::path::Path;
+            use std::path::PathBuf;
+            use walkdir::WalkDir;
+
+            let path: String = super::config_manager::load()
+                .get_or("path", "./")
+                .to_string();
+            let path: &Path = Path::new(&path);
+            let lflist_path: PathBuf = path.join("lflist.conf");
+
+            WalkDir::new(path.join("expansions"))
+                .max_depth(1)
+                .into_iter()
+                .for_each(|i| {
+                    if let Ok(i) = i {
+                        let p: &Path = i.path();
+                        if let Some(name) = p.file_name().and_then(|n| n.to_str())
+                            && name.ends_with("lflist.conf")
+                        {
+                            deck_manager
+                                .load_lflist(&p.to_string_lossy())
+                                .map_err(|err| {
+                                    log::warn!("Failed to read lflist {}: {:?}", p.display(), err)
+                                })
+                                .ok();
+                        }
+                    }
+                });
+            deck_manager
+                .load_lflist(&lflist_path.to_string_lossy())
+                .map_err(|err| {
+                    log::warn!("Failed to read lflist {}: {:?}", lflist_path.display(), err)
+                })
+                .ok();
         }
         if !deck_manager.lflists.is_empty() {
             deck_manager.lflists.push(LFList {
@@ -375,7 +526,8 @@ pub mod config_manager {
     use arc_swap::ArcSwap;
     use hashbrown::HashMap;
 
-    static GLOBAL_CONFIG_MANAGER: LazyLock<ArcSwap<ConfigManager>> = LazyLock::new(|| ArcSwap::from_pointee(ConfigManager::new()));
+    static GLOBAL_CONFIG_MANAGER: LazyLock<ArcSwap<ConfigManager>> =
+        LazyLock::new(|| ArcSwap::from_pointee(ConfigManager::new()));
 
     pub fn set_global(config_manager: ConfigManager) {
         GLOBAL_CONFIG_MANAGER.store(Arc::new(config_manager));
@@ -386,7 +538,8 @@ pub mod config_manager {
     }
 
     pub fn init() {
-        let config_path = std::env::var("YGOPRO_CONFIG_PATH").unwrap_or_else(|_| "system.conf".to_string());
+        let config_path =
+            std::env::var("YGOPRO_CONFIG_PATH").unwrap_or_else(|_| "system.conf".to_string());
 
         let mut config_manager = ConfigManager::new();
         config_manager.load(&config_path).ok();
@@ -395,7 +548,10 @@ pub mod config_manager {
     }
 
     pub fn split_paths(path: &str) -> Vec<&str> {
-        path.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect()
+        path.split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     pub struct ConfigManager {
@@ -407,6 +563,10 @@ pub mod config_manager {
             Self {
                 entries: HashMap::new(),
             }
+        }
+
+        pub fn from(entries: HashMap<String, String>) -> Self {
+            Self { entries }
         }
 
         pub fn load(&mut self, path: &str) -> io::Result<()> {
@@ -438,15 +598,12 @@ pub mod config_manager {
         }
 
         pub fn get_or<'a>(&'a self, key: &str, default: &'a str) -> &'a str {
-            self.entries
-                .get(key)
-                .map(|s| s.as_str())
-                .unwrap_or(default)
+            self.entries.get(key).map(|s| s.as_str()).unwrap_or(default)
         }
     }
 }
 
+pub use config_manager::ConfigManager;
 pub use data_manager::DataManager;
 pub use deck_manager::DeckManager;
-pub use config_manager::ConfigManager;
 pub use i18n::set_strings;

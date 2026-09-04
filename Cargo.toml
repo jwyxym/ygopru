@@ -27,9 +27,10 @@ card = [
     "ygopro-external-server-bridge/card",
     "ygopro-handler/card",
 ]
+ygomobile_support = ["ygopro/ygomobile_support"]
 
 [workspace]
-default-members = ["ygopro"]
+default-members = ["ygoserver"]
 resolver = "2"
 members = [
     "ygopro-data",
@@ -37,6 +38,7 @@ members = [
     "ygopro-core-wrapper",
     "ygopro-handler",
     "ygopro",
+    "ygoserver",
     "ygopro-toolkits",
     "ygopro-external-server-bridge"
 ]

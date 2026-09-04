@@ -1,0 +1,42 @@
+[package]
+name = "ygoserver"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "ygoserver"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "ygopro"
+path = "src/main.rs"
+
+[dependencies]
+ygopro = { path = "../ygopro", default-features = false }
+ygopro-core-wrapper = { path = "../ygopro-core-wrapper", default-features = false }
+ygopro-data.workspace = true
+ygopro-handler = { path = "../ygopro-handler", default-features = false }
+
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+log = "0.4"
+env_logger = { version = "0.11", features = ["auto-color", "humantime"] }
+base64 = "0.22"
+binrw = "0.13"
+futures = "0.3"
+hashbrown = "0.17.1"
+jni = { version = "0.21", optional = true }
+parking_lot = { version = "0", features = ["arc_lock", "send_guard"] }
+
+[features]
+default = ["card", "zip"]
+card = [
+    "ygopro/card",
+    "ygopro-core-wrapper/card",
+    "ygopro-data/card",
+    "ygopro-handler/card",
+]
+zip = ["ygopro/zip"]
+ygomobile_support = ["ygopro/ygomobile_support", "zip", "dep:jni"]

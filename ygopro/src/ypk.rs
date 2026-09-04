@@ -1,6 +1,7 @@
 pub mod archive_manager {
     use std::fs;
     use std::io::Read;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::LazyLock;
 
@@ -9,36 +10,94 @@ pub mod archive_manager {
     use zip::ZipArchive;
 
     struct ExpansionArchive {
-        _path: String,
+        _path: PathBuf,
         archive_reader: Mutex<ZipArchive<fs::File>>,
     }
 
-    static GLOBAL_ARCHIVES: LazyLock<ArcSwap<Vec<ExpansionArchive>>> = LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
+    static GLOBAL_ARCHIVES: LazyLock<ArcSwap<Vec<ExpansionArchive>>> =
+        LazyLock::new(|| ArcSwap::from_pointee(Vec::new()));
 
     pub fn init() {
-        let mut expansion_archives = Vec::new();
-        let entries = if let Ok(entries) = fs::read_dir("./expansions") {
-            entries 
-        } else {
-            log::debug!("Failed to read directory ./expansions, it may not exists");
-            GLOBAL_ARCHIVES.store(Arc::new(expansion_archives));
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !is_expansion_archive(&path) {
-                continue;
-            }
-            let Ok(file) = fs::File::open(&path) else {
-                log::debug!("Failed to open archive {}", path.display());
-                continue;
+        let mut expansion_archives: Vec<ExpansionArchive> = Vec::new();
+        #[cfg(not(feature = "ygomobile_support"))]
+        {
+            let entries = if let Ok(entries) = fs::read_dir("./expansions") {
+                entries
+            } else {
+                log::debug!("Failed to read directory ./expansions, it may not exists");
+                GLOBAL_ARCHIVES.store(Arc::new(expansion_archives));
+                return;
             };
-            match ZipArchive::new(file) {
-                Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
-                    _path: path.display().to_string(),
-                    archive_reader: Mutex::new(archive_reader),
-                }),
-                Err(error) => log::debug!("Failed to open archive {}: {}", path.display(), error),
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !is_expansion_archive(&path) {
+                    continue;
+                }
+                let Ok(file) = fs::File::open(&path) else {
+                    log::debug!("Failed to open archive {}", path.display());
+                    continue;
+                };
+                match ZipArchive::new(file) {
+                    Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
+                        _path: path,
+                        archive_reader: Mutex::new(archive_reader),
+                    }),
+                    Err(error) => {
+                        log::debug!("Failed to open archive {}: {}", path.display(), error)
+                    }
+                }
+            }
+        }
+
+        #[cfg(feature = "ygomobile_support")]
+        {
+            use walkdir::WalkDir;
+
+            let path: String = crate::managers::config_manager::load()
+                .get_or("path", "./")
+                .to_string();
+            let path: &Path = Path::new(&path);
+            let expansions_path: PathBuf = path.join("expansions");
+            WalkDir::new(expansions_path)
+                .max_depth(1)
+                .into_iter()
+                .for_each(|i| {
+                    if let Ok(i) = i {
+                        let path: PathBuf = i.into_path();
+                        if is_expansion_archive(&path) {
+                            if let Ok(file) = fs::File::open(&path) {
+                                match ZipArchive::new(file) {
+                                    Ok(archive_reader) => {
+                                        expansion_archives.push(ExpansionArchive {
+                                            _path: path,
+                                            archive_reader: Mutex::new(archive_reader),
+                                        })
+                                    }
+                                    Err(error) => log::debug!(
+                                        "Failed to open archive {}: {}",
+                                        path.display(),
+                                        error
+                                    ),
+                                }
+                            } else {
+                                log::debug!("Failed to open archive {}", path.display());
+                            };
+                        }
+                    }
+                });
+            let path = path.join("scripts.zip");
+            if let Ok(file) = fs::File::open(&path) {
+                match ZipArchive::new(file) {
+                    Ok(archive_reader) => expansion_archives.push(ExpansionArchive {
+                        _path: path,
+                        archive_reader: Mutex::new(archive_reader),
+                    }),
+                    Err(error) => {
+                        log::debug!("Failed to open archive {}: {}", path.display(), error)
+                    }
+                }
+            } else {
+                log::debug!("Failed to open archive {}", path.display());
             }
         }
         GLOBAL_ARCHIVES.store(Arc::new(expansion_archives));
@@ -83,7 +142,7 @@ pub mod archive_manager {
         names
     }
 
-    fn is_expansion_archive(path: &std::path::Path) -> bool {
+    fn is_expansion_archive(path: &Path) -> bool {
         path.extension()
             .and_then(|extension| extension.to_str())
             .map(|extension| extension == "zip" || extension == "ypk")
