@@ -1,4 +1,5 @@
 //! Configuration for ygopro server.
+//! 
 //! [`Configuration`] is an `anymap::Map` wrapper that can be used to store plugin configurations.
 //! Pass that to [`DuelHost::new`] to configure the server.
 //! It can be seen as `HostInfo` extended in this project.

@@ -1,8 +1,8 @@
-//! Manage global information
+//! Manage global information.
 //!
-//! manager is a mapping to origin manager.cpp.
+//! manager is a mapping to origin `manager.cpp`.
 
-/// Manage card info
+/// Manage card info from `cards.cdb`.
 pub mod data_manager {
     use std::cell::RefCell;
     use std::ffi::CStr;
@@ -23,8 +23,8 @@ pub mod data_manager {
     thread_local! {
         static SCRIPT_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(0x20000));
     }
-    static GLOBAL_DATA_MANAGER: LazyLock<ArcSwap<DataManager>> =
-        LazyLock::new(|| ArcSwap::from_pointee(DataManager::new()));
+
+    static GLOBAL_DATA_MANAGER: LazyLock<ArcSwap<DataManager>> = LazyLock::new(|| ArcSwap::from_pointee(DataManager::new()));
 
     pub fn set_global(data_manager: DataManager) {
         GLOBAL_DATA_MANAGER.store(Arc::new(data_manager));
@@ -38,6 +38,7 @@ pub mod data_manager {
         GLOBAL_DATA_MANAGER.load_full()
     }
 
+    /// Load cards from `cards.cdb` and expansions.
     pub fn init() {
         let mut data_manager = DataManager::new();
         #[cfg(all(feature = "card", not(feature = "ygomobile_support")))]
@@ -142,6 +143,8 @@ pub mod data_manager {
         set_global(data_manager);
     }
 
+    /// When card registered an alias, and |alias - code| < `CARD_ARTWORK_VERSIONS_OFFSET`, 
+    /// it will be seen as the same card, but with the different artwork.
     #[cfg(feature = "card")]
     pub const CARD_ARTWORK_VERSIONS_OFFSET: u32 = 20;
 
@@ -154,6 +157,7 @@ pub mod data_manager {
 
     pub struct DataManager {
         pub cards: HashMap<u32, Card>,
+        
         pub extra_setcode: HashMap<u32, Vec<u16>>,
     }
 

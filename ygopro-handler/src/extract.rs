@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
@@ -44,6 +45,16 @@ where Req: Send, State: Send, Res: Send
 {
     fn from_request(bundle: &mut Bundle<Req, State, Res>) -> Option<Self> {
         Some(unsafe { &mut *(bundle as *mut Bundle<Req, State, Res>) })
+    }
+}
+
+impl<State, Res> FromRequest<Box<dyn Any + Send>, State, Res> for &mut Box<dyn Any + Send>
+where
+    State: Send,
+    Res: Send,
+{
+    fn from_request(bundle: &mut Bundle<Box<dyn Any + Send>, State, Res>) -> Option<Self> {
+        Some(unsafe { &mut *(&mut bundle.request as *mut Box<dyn Any + Send>) })
     }
 }
 

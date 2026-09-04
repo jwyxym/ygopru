@@ -1,6 +1,11 @@
-//! Limit player's duel time.
+//! Limit each player's duel time.
+//!
+//! Upstream this is a built-in mechanism; here it is provided as a plugin.
+//! The timer starts on `DuelStart` and stops on `DuelEnd`. It ticks once per
+//! second, sending a `timer_tick` command to the core, and emits a `Timeout`
+//! ex instruction when a player exhausts their time limit.
 //! 
-//! That's an internal 
+//! This plugin is defaultly enabled.
 //!
 //! # Examples
 //!
@@ -56,7 +61,7 @@ impl TimeLimit {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
             loop {
                 interval.tick().await;
-                if sender.send(Request::Command { name: "timer_tick", arguments: [0; 8] }).is_err() { break; }
+                if sender.send(Request::Command { name: "timer_tick", arguments: None }).is_err() { break; }
             }
         }));
     }
@@ -77,7 +82,6 @@ fn on_duel_start(duel: &mut Duel, attachment: &mut TimeLimit) {
         attachment.time_elapsed = 0;
         for duel_player in duel.players.iter_mut().flatten() {
             duel_player.time_limit = time_limit;
-            duel_player.time_compensator = 0;
         }
         attachment.start_timer(duel);
     }
@@ -95,7 +99,7 @@ fn on_new_turn(duel: &mut Duel, attachment: &mut TimeLimit) {
 
 #[command]
 #[register_to(crate::command::COMMANDS as crate::command::CommandHandler with &'static str)]
-fn timer_tick(duel: &mut Duel, attachment: &mut TimeLimit, _arguments: &[u8; 8]) -> &'static str {
+fn timer_tick(duel: &mut Duel, attachment: &mut TimeLimit) -> &'static str {
     if let Some(last_response) = duel.last_response && duel.host_info.time_limit > 0 {
         attachment.time_elapsed = attachment.time_elapsed.saturating_add(1);
         let timed_out = duel.get(last_response)

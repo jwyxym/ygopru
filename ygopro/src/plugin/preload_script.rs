@@ -1,6 +1,8 @@
 //! Extra scripts preloaded into every duel after creation.
 //! 
-//! It is often for loading server-limited special rules.
+//! It is often for loading server-limited special rules.    
+//! File missing will not cause error.    
+//! This plugin is defaultly enabled.
 //!
 //! # Examples
 //!
@@ -31,8 +33,10 @@ use crate::ygopro_handlers::Handler;
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 
+/// Extra scripts to preload into every duel.
 #[derive(Clone, Configuration)]
 pub struct Configuration {
+    /// Script paths preloaded into every duel after creation.
     #[config(not_from_env, default = "vec![\"./script/special.lua\".to_string()]")]
     pub preloaded_scripts: Vec<String>,
 }

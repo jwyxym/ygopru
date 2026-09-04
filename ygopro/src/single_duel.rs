@@ -152,7 +152,7 @@ impl SingleDuel {
                             continue;
                         };
                         let state = State { duel, states };
-                        let bundle = Bundle::new(ygopro_handler::extract::Request { message: arguments, extra: () }, state, Default::default());
+                        let bundle = Bundle::new(arguments.unwrap_or_else(|| Box::new(())), state, Default::default());
                         let bundle = handler.call(bundle).await;
                         let Bundle {
                             request: _,
@@ -408,7 +408,7 @@ pub mod ygopro_handlers {
             if duel.stage == DuelStage::Siding {
                 duel.sender.send(stoc::DuelStart.into(), SendTarget::AllPlayer);
             }
-            if duel.stage != DuelStage::End && !duel.duel.core.ended {
+            if duel.stage > DuelStage::Begin && duel.stage != DuelStage::End && !duel.duel.core.ended {
                 let Ok(leaving_index) = PlayerIndex::try_from(player) else { return };
                 let netplayer: Netplayer = leaving_index.into();
                 let loser = transformer.to_core_player(netplayer);

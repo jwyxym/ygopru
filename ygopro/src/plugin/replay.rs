@@ -1,5 +1,7 @@
 //! Control how replays are distributed or stored.
 //!
+//! This plugin is defaultly enabled.
+//!
 //! # Examples
 //!
 //! Enable the module with a replay mode:
@@ -31,8 +33,10 @@ use crate::ygopro_handlers::YGOPRO_HANDLERS_EX;
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 
+/// Replay distribution or storage policy.
 #[derive(Clone, Configuration)]
 pub struct Configuration {
+    /// Mode controlling how replays are distributed or stored.
     #[config(not_from_env, default = "ReplayMode::empty()")]
     pub mode: ReplayMode
 }
