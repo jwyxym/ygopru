@@ -38,6 +38,20 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
+      - name: Compress binaries with UPX
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            choco install upx -y
+            BIN="target/release/ygopro.exe"
+          else
+            sudo apt-get update
+            sudo apt-get install -y upx-ucl
+            BIN="target/release/ygopro"
+          fi
+          upx-ucl --best "$BIN"
+
       - name: Package
         shell: bash
         run: |

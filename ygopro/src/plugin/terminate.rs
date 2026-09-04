@@ -2,6 +2,8 @@
 //! 
 //! ygopro exits when all players leave, but in server scenarios, we want to terminate
 //! the instance when duel ends. That plugin help set the termination policy for a room.
+//! 
+//! This plugin is defaultly enabled.
 //!
 //! # Examples
 //!
@@ -40,10 +42,13 @@ use crate::ygopro_handlers::YGOPRO_HANDLERS_EX;
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 
+/// Room termination policy.
 #[derive(Clone, Configuration)]
 pub struct Configuration {
+    /// When to terminate the room. `SendTarget::None` keeps the room alive forever.
     #[config(not_from_env)]
     pub terminate_when: SendTarget,
+    /// Whether to terminate the room when the match ends.
     #[config(default = "true")]
     pub terminate_when_match_end: bool
 }

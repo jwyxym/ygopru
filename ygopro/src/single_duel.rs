@@ -152,7 +152,7 @@ impl SingleDuel {
                             continue;
                         };
                         let state = State { duel, states };
-                        let bundle = Bundle::new(ygopro_handler::extract::Request { message: arguments, extra: () }, state, Default::default());
+                        let bundle = Bundle::new(arguments.unwrap_or_else(|| Box::new(())), state, Default::default());
                         let bundle = handler.call(bundle).await;
                         let Bundle {
                             request: _,

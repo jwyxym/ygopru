@@ -1,6 +1,6 @@
 /// Wrapper of Duel instances. 
 /// 
-/// 
+/// [`DuelHost`] is a wrapper of [`Duel`] instances.
 
 use std::future::Future;
 use std::ops::Deref;
@@ -28,8 +28,8 @@ use crate::single_duel::SingleDuel;
 use crate::tag_duel::TagDuel;
 
 pub struct DuelHost {
-    ctos_sender: mpsc::UnboundedSender<Request>,
-    finished_sender: watch::Sender<bool>,
+    pub(crate) ctos_sender: mpsc::UnboundedSender<Request>,
+    pub finished_sender: watch::Sender<bool>,
 }
 
 impl DuelHost {

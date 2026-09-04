@@ -8,6 +8,7 @@ pub mod duel;
 pub mod host;
 pub mod managers;
 pub mod plugin;
+pub mod replay;
 pub mod message;
 pub mod command;
 pub mod cli;

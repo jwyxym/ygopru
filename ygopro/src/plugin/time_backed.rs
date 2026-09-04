@@ -1,4 +1,12 @@
-//! When player operates, the server will add some time to that player.
+//! Give players extra time while performing operations.
+//!
+//! Each turn a player is granted a budget of time that may be added back to
+//! their clock. Every time the player performs a meaningful operation, some
+//! time is added to their remaining time limit, drawing from that budget. This
+//! reduces the risk of a player timing out during a long series of operations,
+//! without letting a single turn extend forever.
+//! 
+//! This plugin is defaultly enabled.
 //!
 //! # Examples
 //!
@@ -31,10 +39,14 @@ use crate::ygopro_handlers::Handler;
 #[distributed_slice(crate::plugin::DEFAULT_ENABLED_PLUGINS)]
 pub static NAME: &'static str = module_path!();
 
+/// Policy for granting extra time back to a player.
 #[derive(Clone, Configuration)]
 pub struct Configuration {
+    /// Seconds added to the player's clock for each meaningful operation.
     #[config(default = "1")]
     pub add_time_after_operation: u16,
+    /// Maximum seconds a player may recover in a single turn before the budget is exhausted.
+    /// `0` means the same as the player's `time_limit`, so the whole time limit may be recovered.
     pub max_add_time_each_turn: u16,
 }
 

@@ -164,7 +164,7 @@ impl Next for RecreateDuel {}
 impl Next for Timeout {}
 impl Next for MatchEnd {
     fn process_terminate(duel: &mut Duel) {
-        duel.request_sender.send(crate::duel::Request::Command { name: "terminate", arguments: [0; 8] }).ok();
+        duel.request_sender.send(crate::duel::Request::Command { name: "terminate", arguments: Some(Box::new([0; 8])) }).ok();
     }
 }
 impl Next for Terminate {

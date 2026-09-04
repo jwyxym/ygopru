@@ -29,8 +29,11 @@ use crate::ygopro_handlers::Response;
 /// Name for activitating this module in the plugin system.
 pub static NAME: &'static str = module_path!();
 
+/// Policy for a best-of-N match.
 #[derive(Clone, Configuration)]
 pub struct Configuration {
+    /// Number of duels in a match. A match ends once a player wins more than half of them.
+    /// `0` keeps the default Single/Match behavior.
     pub override_best_of: u8
 }
 
