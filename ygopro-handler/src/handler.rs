@@ -47,11 +47,14 @@ impl Default for StopFlag {
 }
 
 #[derive(Debug)]
+#[repr(C)]
 pub struct Bundle<Req, State = crate::handler::State, Res = ()> {
     pub request: Req,
-    pub state: State,
     pub response: Res,
-    pub stop_flag: StopFlag    
+    pub stop_flag: StopFlag,
+    // In order to make multiple Call impl in SyncHandler, we must put state
+    // in the last position because we use the mem-order trick here.
+    pub state: State,
 }
 
 impl<Req, State, Res> Bundle<Req, State, Res> {
@@ -238,8 +241,9 @@ pub mod tower_handler {
         type Error = Infallible;
         type Future = HandlerServiceFuture<H::Future, Req, State, Res>;
 
-        fn call(&mut self, mut bundle: Bundle<Req, State, Res>) -> Self::Future {
-            let future = self.handler.call(&mut bundle);
+        fn call(&mut self, bundle: Bundle<Req, State, Res>) -> Self::Future {
+            let mut bundle = Box::new(bundle);
+            let future = self.handler.call(&mut *bundle);
             HandlerServiceFuture { future, bundle: Some(bundle) }
         }
 
@@ -252,7 +256,7 @@ pub mod tower_handler {
                 struct HandlerServiceFuture<F, Req, State, Res> {
             #[pin]
             future: F,
-            bundle: Option<Bundle<Req, State, Res>>,
+            bundle: Option<Box<Bundle<Req, State, Res>>>,
         }
     }
 
@@ -267,12 +271,12 @@ pub mod tower_handler {
             let this = self.project();
             match this.future.poll(cx) {
                 Poll::Ready(Some(response)) => {
-                    let mut bundle = this.bundle.take().unwrap();
+                    let mut bundle = *this.bundle.take().unwrap();
                     bundle.response = bundle.response * response;
                     Poll::Ready(Ok(bundle))
                 }
                 Poll::Ready(None) => {
-                    Poll::Ready(Ok(this.bundle.take().unwrap()))
+                    Poll::Ready(Ok(*this.bundle.take().unwrap()))
                 }
                 Poll::Pending => Poll::Pending,
             }
@@ -484,6 +488,7 @@ pub mod sync_handler {
     /// Uses raw pointers and monomorphized function pointers to achieve type erasure
     /// without requiring `'static` bounds on `Req`, `State`, `Res`, or the handler's
     /// type parameter `T`. The caller is responsible for ensuring soundness.
+    #[repr(C)]
     pub struct SyncHandler<Req, State, Res> {
         pub name: &'static str,
         pub module_name: &'static str,
@@ -566,30 +571,51 @@ pub mod sync_handler {
         }
     }
 
-    impl<Req, State, Res> Call<Req, State, Res> for SyncHandler<Req, State, Res>
+    impl<Req, SubState, Target, Res> Call<Req, Target, Res> for SyncHandler<Req, SubState, Res>
     where
-        Req: Send,
-        State: Send,
-        Res: Send + std::ops::Mul<Output = Res>,
+        Req: Send + 'static,
+        SubState: Send + 'static,
+        Target: Send + 'static + WithSubState<SubState>,
+        Res: Send + std::ops::Mul<Output = Res> + 'static,
     {
-        fn call(&self, bundle: Bundle<Req, State, Res>) -> Pin<Box<dyn Future<Output = Bundle<Req, State, Res>> + Send>> {
+        fn call(&self, bundle: Bundle<Req, Target, Res>) -> Pin<Box<dyn Future<Output = Bundle<Req, Target, Res>> + Send>> {
             let mut bundle = bundle;
-            let result = unsafe { (self.call_fn)(self.handler_pointer, &mut bundle) };
+            let result = unsafe {
+                // safety: Target: WithSubState<SubState> makes SubState a layout prefix of Target,
+                // and Bundle putting state last keeps the leading fields at identical offsets.
+                let sub_bundle = &mut *(&mut bundle as *mut Bundle<Req, Target, Res> as *mut Bundle<Req, SubState, Res>);
+                (self.call_fn)(self.handler_pointer, sub_bundle)
+            };
             if let Some(response) = result {
                 bundle.response = bundle.response * response;
             }
-            let boxed: Box<dyn Future<Output = Bundle<Req, State, Res>> + Send> = Box::new(std::future::ready(bundle));
-            unsafe {
-                let raw = Box::into_raw(boxed);
-                Pin::from(Box::from_raw(std::mem::transmute::<
-                    *mut (dyn Future<Output = Bundle<Req, State, Res>> + Send),
-                    *mut (dyn Future<Output = Bundle<Req, State, Res>> + Send + 'static),
-                >(raw)))
-            }
+            Box::pin(async move { bundle })
         }
 
         fn priority(&self) -> u8 {
             self.priority
         }
+    }
+
+    /// A state whose `states` map is the leading field (offset 0) and whose `duel`
+    /// field follows at the same offset as `SubState`'s, so that `&mut Self` can be
+    /// reinterpreted as `&mut SubState`.
+    ///
+    /// # Safety
+    /// The implementor must guarantee that every field of `SubState` the handler
+    /// will read through the reinterpreted view resides at the same offset in
+    /// `Self`. For duel states this holds because the `states` map comes first in
+    /// both (offset 0) and `Self`'s duel starts with `SubState`'s duel as a prefix.
+    pub unsafe trait WithSubState<SubState> {}
+
+    unsafe impl<T> WithSubState<T> for T {}
+
+    pub fn assert_sync_handler_layout<Req, SubState, Target, Res>() {
+        const {
+            assert!(std::mem::size_of::<SyncHandler<Req, SubState, Res>>() == std::mem::size_of::<SyncHandler<Req, Target, Res>>());
+            assert!(std::mem::align_of::<SyncHandler<Req, SubState, Res>>() == std::mem::align_of::<SyncHandler<Req, Target, Res>>());
+            assert!(std::mem::offset_of!(SyncHandler<Req, SubState, Res>, call_fn) == std::mem::offset_of!(SyncHandler<Req, Target, Res>, call_fn));
+            assert!(std::mem::offset_of!(SyncHandler<Req, SubState, Res>, handler_pointer) == std::mem::offset_of!(SyncHandler<Req, Target, Res>, handler_pointer));
+        };
     }
 }

@@ -1,38 +1,47 @@
+//! Manage global information
+//!
+//! manager is a mapping to origin manager.cpp.
+
+/// Manage card info
 pub mod data_manager {
+    use std::cell::RefCell;
     use std::ffi::c_char;
     use std::ffi::c_int;
     use std::ffi::CStr;
     use std::fs;
     use std::sync::Arc;
+    use std::sync::LazyLock;
 
-    use arc_swap::ArcSwapOption;
+    use arc_swap::ArcSwap;
     use hashbrown::HashMap;
-    use parking_lot::Mutex;
 
     use ygopro_data::constants::Type;
     use ygopro_data::data::Card;
     use ygopro_data::data::CoreCard;
 
-    static SCRIPT_BUFFER: Mutex<[u8; 0x100000]> = Mutex::new([0u8; 0x100000]);
-    static GLOBAL_DATA_MANAGER: ArcSwapOption<DataManager> = ArcSwapOption::const_empty();
+    thread_local! {
+        static SCRIPT_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(0x20000));
+    }
+    static GLOBAL_DATA_MANAGER: LazyLock<ArcSwap<DataManager>> = LazyLock::new(|| ArcSwap::from_pointee(DataManager::new()));
 
     pub fn set_global(data_manager: DataManager) {
-        GLOBAL_DATA_MANAGER.store(Some(Arc::new(data_manager)));
+        GLOBAL_DATA_MANAGER.store(Arc::new(data_manager));
     }
 
-    pub fn load() -> arc_swap::Guard<Option<Arc<DataManager>>> {
+    pub fn load() -> arc_swap::Guard<Arc<DataManager>> {
         GLOBAL_DATA_MANAGER.load()
+    }
+
+    pub fn load_full() -> Arc<DataManager> {
+        GLOBAL_DATA_MANAGER.load_full()
     }
 
     pub fn init() {
         let mut data_manager = DataManager::new();
         #[cfg(feature = "card")]
         {
-            let db_path = super::config_manager::load()
-                .as_ref()
-                .and_then(|config_manager| config_manager.get("db_path"))
-                .unwrap_or("cards.cdb, expansions/*.cdb")
-                .to_string();
+            let config_manager = super::config_manager::load();
+            let db_path = config_manager.get("db_path").unwrap_or("cards.cdb, expansions/*.cdb").to_string();
 
             for db_pattern in super::config_manager::split_paths(&db_path) {
                 let Ok(entries) = glob::glob(db_pattern) else {
@@ -169,33 +178,26 @@ pub mod data_manager {
             return 0;
         }
         let guard = GLOBAL_DATA_MANAGER.load();
-        if let Some(data_manager) = (*guard).as_ref() {
-            if let Some(card) = data_manager.get_core_card(code) {
-                unsafe { *data = card.clone(); }
-                return 0;
-            }
+        if let Some(card) = guard.get_core_card(code) {
+            unsafe { *data = card.clone(); }
+            return 0;
         }
         unsafe { *data = CoreCard::default(); }
         0
     }
 
-    /// Corresponds to `ScriptReaderEx` in data_manager.cpp:493-517.
     pub extern "C" fn script_reader(script_path: *const c_char, slen: *mut c_int) -> *mut u8 {
-        fn read_file(file_path: &str, buffer: &mut [u8]) -> Option<usize> {
+        fn read_file(file_path: &str, buffer: &mut Vec<u8>) -> Option<usize> {
             fs::read(file_path).ok().and_then(|data| {
-                if data.len() >= buffer.len() {
-                    return None;
-                }
+                buffer.resize(data.len(), 0);
                 buffer[..data.len()].copy_from_slice(&data);
                 Some(data.len())
             })
         }
         #[cfg(feature = "zip")]
-        fn read_archive(archive_path: &str, buffer: &mut [u8]) -> Option<usize> {
+        fn read_archive(archive_path: &str, buffer: &mut Vec<u8>) -> Option<usize> {
             crate::ypk::archive_manager::read_from_archives(archive_path).and_then(|data| {
-                if data.len() >= buffer.len() {
-                    return None;
-                }
+                buffer.resize(data.len(), 0);
                 buffer[..data.len()].copy_from_slice(&data);
                 Some(data.len())
             })
@@ -205,68 +207,69 @@ pub mod data_manager {
             return std::ptr::null_mut();
         }
         let path = unsafe { CStr::from_ptr(script_path).to_string_lossy() };
-        let mut buffer = SCRIPT_BUFFER.lock();
+        SCRIPT_BUFFER.with(|buffer| {
+            let mut buffer = buffer.borrow_mut();
 
-        if !path.starts_with("./script") {
-            if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
-                unsafe { *slen = len as c_int; }
-                return buffer.as_mut_ptr();
+            if !path.starts_with("./script") {
+                if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
+                    unsafe { *slen = len as c_int; }
+                    return buffer.as_mut_ptr();
+                }
+                return std::ptr::null_mut();
             }
-            return std::ptr::null_mut();
-        }
 
-        let script_name = &path[2..];
-        let expansions_path = format!("./expansions/{}", script_name);
-        let prefer_expansion_script = super::config_manager::load()
-            .as_ref()
-            .and_then(|config_manager| config_manager.get("prefer_expansion_script"))
-            .map(|value| value.trim() != "0")
-            .unwrap_or(false);
+            let script_name = &path[2..];
+            let expansions_path = format!("./expansions/{}", script_name);
+            let config_manager = super::config_manager::load();
+            let prefer_expansion_script = config_manager.get("prefer_expansion_script").map(|value| value.trim() != "0").unwrap_or(false);
 
-        if prefer_expansion_script {
-            if let Some(len) = read_file(&expansions_path, &mut *buffer) {
-                unsafe { *slen = len as c_int; }
-                return buffer.as_mut_ptr();
+            if prefer_expansion_script {
+                if let Some(len) = read_file(&expansions_path, &mut *buffer) {
+                    unsafe { *slen = len as c_int; }
+                    return buffer.as_mut_ptr();
+                }
+                #[cfg(feature = "zip")]
+                if let Some(len) = read_archive(script_name, &mut *buffer) {
+                    unsafe { *slen = len as c_int; }
+                    return buffer.as_mut_ptr();
+                }
+                if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
+                    unsafe { *slen = len as c_int; }
+                    return buffer.as_mut_ptr();
+                }
+            } else {
+                #[cfg(feature = "zip")]
+                if let Some(len) = read_archive(script_name, &mut *buffer) {
+                    unsafe { *slen = len as c_int; }
+                    return buffer.as_mut_ptr();
+                }
+                if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
+                    unsafe { *slen = len as c_int; }
+                    return buffer.as_mut_ptr();
+                }
+                if let Some(len) = read_file(&expansions_path, &mut *buffer) {
+                    unsafe { *slen = len as c_int; }
+                    return buffer.as_mut_ptr();
+                }
             }
-            #[cfg(feature = "zip")]
-            if let Some(len) = read_archive(script_name, &mut *buffer) {
-                unsafe { *slen = len as c_int; }
-                return buffer.as_mut_ptr();
-            }
-            if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
-                unsafe { *slen = len as c_int; }
-                return buffer.as_mut_ptr();
-            }
-        } else {
-            #[cfg(feature = "zip")]
-            if let Some(len) = read_archive(script_name, &mut *buffer) {
-                unsafe { *slen = len as c_int; }
-                return buffer.as_mut_ptr();
-            }
-            if let Some(len) = read_file(path.as_ref(), &mut *buffer) {
-                unsafe { *slen = len as c_int; }
-                return buffer.as_mut_ptr();
-            }
-            if let Some(len) = read_file(&expansions_path, &mut *buffer) {
-                unsafe { *slen = len as c_int; }
-                return buffer.as_mut_ptr();
-            }
-        }
 
-        std::ptr::null_mut()
+            std::ptr::null_mut()
+        })
     }
 }
 
+/// Manage info from `strings.conf`.
 pub mod i18n {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::LazyLock;
 
-    use arc_swap::ArcSwapOption;
+    use arc_swap::ArcSwap;
 
-    static GLOBAL_STRINGS: ArcSwapOption<HashMap<String, HashMap<i32, String>>> = ArcSwapOption::const_empty();
+    static GLOBAL_STRINGS: LazyLock<ArcSwap<HashMap<String, HashMap<i32, String>>>> = LazyLock::new(|| ArcSwap::from_pointee(HashMap::new()));
 
     pub fn set_strings(strings: HashMap<String, HashMap<i32, String>>) {
-        GLOBAL_STRINGS.store(Some(Arc::new(strings)));
+        GLOBAL_STRINGS.store(Arc::new(strings));
     }
 
     pub fn init() {
@@ -275,33 +278,32 @@ pub mod i18n {
     }
 }
 
+/// Manage info from `lflists.conf`
 pub mod deck_manager {
     use std::collections::HashMap;
     use std::fs;
     use std::io;
     use std::sync::Arc;
+    use std::sync::LazyLock;
 
-    use arc_swap::ArcSwapOption;
+    use arc_swap::ArcSwap;
 
     use ygopro_data::data::parse_lflist_content;
     use ygopro_data::data::LFList;
 
-    static GLOBAL_DECK_MANAGER: ArcSwapOption<DeckManager> = ArcSwapOption::const_empty();
+    static GLOBAL_DECK_MANAGER: LazyLock<ArcSwap<DeckManager>> = LazyLock::new(|| ArcSwap::from_pointee(DeckManager::new()));
 
     pub fn set_global(deck_manager: DeckManager) {
-        GLOBAL_DECK_MANAGER.store(Some(Arc::new(deck_manager)));
+        GLOBAL_DECK_MANAGER.store(Arc::new(deck_manager));
     }
 
-    pub fn load() -> arc_swap::Guard<Option<Arc<DeckManager>>> {
+    pub fn load() -> arc_swap::Guard<Arc<DeckManager>> {
         GLOBAL_DECK_MANAGER.load()
     }
 
     pub fn init() {
-        let lflist_path = super::config_manager::load()
-            .as_ref()
-            .and_then(|config_manager| config_manager.get("lflist_path"))
-            .unwrap_or("expansions/lflist.conf, lflist.conf")
-            .to_string();
+        let config_manager = super::config_manager::load();
+        let lflist_path = config_manager.get("lflist_path").unwrap_or("expansions/lflist.conf, lflist.conf").to_string();
 
         let mut deck_manager = DeckManager::new();
         for lflist_pattern in super::config_manager::split_paths(&lflist_path) {
@@ -363,21 +365,23 @@ pub mod deck_manager {
     }
 }
 
+/// Manage info from `system.conf`
 pub mod config_manager {
     use std::fs;
     use std::io;
     use std::sync::Arc;
+    use std::sync::LazyLock;
 
-    use arc_swap::ArcSwapOption;
+    use arc_swap::ArcSwap;
     use hashbrown::HashMap;
 
-    static GLOBAL_CONFIG_MANAGER: ArcSwapOption<ConfigManager> = ArcSwapOption::const_empty();
+    static GLOBAL_CONFIG_MANAGER: LazyLock<ArcSwap<ConfigManager>> = LazyLock::new(|| ArcSwap::from_pointee(ConfigManager::new()));
 
     pub fn set_global(config_manager: ConfigManager) {
-        GLOBAL_CONFIG_MANAGER.store(Some(Arc::new(config_manager)));
+        GLOBAL_CONFIG_MANAGER.store(Arc::new(config_manager));
     }
 
-    pub fn load() -> arc_swap::Guard<Option<Arc<ConfigManager>>> {
+    pub fn load() -> arc_swap::Guard<Arc<ConfigManager>> {
         GLOBAL_CONFIG_MANAGER.load()
     }
 

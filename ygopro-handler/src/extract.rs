@@ -35,6 +35,17 @@ macro_rules! impl_extractable {
 impl_extractable!(SocketAddr);
 impl_extractable!(Netplayer);
 impl_extractable!(CorePlayer);
+impl_extractable!(usize);
+impl_extractable!(u8);
+impl_extractable!(u32);
+
+impl<Req, State, Res> FromRequest<Req, State, Res> for &mut Bundle<Req, State, Res>
+where Req: Send, State: Send, Res: Send 
+{
+    fn from_request(bundle: &mut Bundle<Req, State, Res>) -> Option<Self> {
+        Some(unsafe { &mut *(bundle as *mut Bundle<Req, State, Res>) })
+    }
+}
 
 impl<Message, Extra, State, Res> FromRequest<Request<Message, Extra>, State, Res> for &Message
 where
@@ -114,6 +125,51 @@ macro_rules! impl_variant_complex_ref {
     };
 }
 
+macro_rules! impl_variant_gm_from_stoc {
+    ($variant:ident) => {
+        impl<Extra, State, Res> FromRequest<Request<Complex<stoc::Message>, Extra>, State, Res> for &gm::$variant
+        where
+            Extra: Send,
+            State: Send,
+            Res: Send,
+        {
+            fn from_request(bundle: &mut Bundle<Request<Complex<stoc::Message>, Extra>, State, Res>) -> Option<Self> {
+                if let stoc::Message::GameMessage(game_message) = &*bundle.request.message {
+                    if let gm::Message::$variant(inner) = &game_message.message {
+                        return Some(unsafe { &*std::ptr::from_ref(inner) });
+                    }
+                }
+                None
+            }
+        }
+
+        impl<State, Res> FromRequest<Complex<stoc::Message>, State, Res> for &gm::$variant
+        where
+            State: Send,
+            Res: Send,
+        {
+            fn from_request(bundle: &mut Bundle<Complex<stoc::Message>, State, Res>) -> Option<Self> {
+                if let stoc::Message::GameMessage(game_message) = &*bundle.request {
+                    if let gm::Message::$variant(inner) = &game_message.message {
+                        return Some(unsafe { &*std::ptr::from_ref(inner) });
+                    }
+                }
+                None
+            }
+        }
+    };
+}
+
+macro_rules! impl_variant_gm_response_as_stoc {
+    ($variant:ident) => {
+        impl IntoResponse<Response<stoc::Message>> for gm::$variant {
+            fn into_response(self) -> Response<stoc::Message> {
+                Response::Replace(gm::Message::$variant(self).into())
+            }
+        }
+    };
+}
+
 macro_rules! impl_ctos {
     ($($variant:ident = $flag:literal),* $(,)?) => {
         $( impl_variant_ref!(ctos, $variant); )*
@@ -135,6 +191,8 @@ macro_rules! impl_gm {
         $( impl_variant_ref!(gm, $variant); )*
         $( impl_variant_complex_ref!(gm, $variant); )*
         $( impl_variant_response!(gm, $variant); )*
+        $( impl_variant_gm_from_stoc!($variant); )*
+        $( impl_variant_gm_response_as_stoc!($variant); )*
     };
 }
 
@@ -211,6 +269,12 @@ impl IntoResponse<Response<gm::Message>> for gm::Message {
     }
 }
 
+impl IntoResponse<Response<stoc::Message>> for gm::Message {
+    fn into_response(self) -> Response<stoc::Message> {
+        Response::Replace(self.into())
+    }
+}
+
 macro_rules! impl_variant_response {
     ($message_mod:ident, $variant:ident) => {
         impl IntoResponse<Response<$message_mod::Message>> for $message_mod::$variant {
@@ -257,10 +321,10 @@ impl<Message> IntoResponse<Response<Message>> for &'static str {
     }
 }
 
-impl <Message> IntoResponse<Response<Message>> for Option<Message> {
+impl<Message, T> IntoResponse<Response<Message>> for Option<T> where T: IntoResponse<Response<Message>> {
     fn into_response(self) -> Response<Message> {
         match self {
-            Some(message) => Response::Replace(message),
+            Some(value) => value.into_response(),
             None => Response::Continue,
         }
     }
@@ -272,6 +336,19 @@ where Response1: IntoResponse<Response<Message>>, Response2: IntoResponse<Respon
         match self {
             Ok(response1) => response1.into_response(),
             Err(response2) => response2.into_response(),
+        }
+    }
+}
+
+impl<Message> Response<Message> {
+    pub fn map<Message2>(self, mut f: impl FnMut(Message) -> Message2) -> Response<Message2> {
+        match self {
+            Response::Continue => Response::Continue,
+            Response::Replace(message) => Response::Replace(f(message)),
+            Response::ReplaceMultiple(messages) => Response::ReplaceMultiple(messages.into_iter().map(f).collect()),
+            Response::Swallow => Response::Swallow,
+            Response::Terminate => Response::Terminate,
+            Response::Kick => Response::Kick,
         }
     }
 }
@@ -293,4 +370,22 @@ pub trait ContainsMap {
 
 pub trait ContainsMapMut {
     fn get_map(&mut self) -> &mut anymap3::Map<dyn std::any::Any + Send>;
+}
+
+impl<S: ContainsMapMut> ContainsMapMut for std::mem::ManuallyDrop<S> {
+    fn get_map(&mut self) -> &mut anymap3::Map<dyn std::any::Any + Send> {
+        ContainsMapMut::get_map(&mut **self)
+    }
+}
+
+// impl<Req, State, Res> FromRequest<Req, State, Res> for &anymap3::Map<dyn anymap3::CloneAny + Send> where State: ContainsMap + Send, Req: Send, Res: Send {
+//     fn from_request(bundle: &mut Bundle<Req, State, Res>) -> Option<Self> {
+//         Some(unsafe { &*(bundle.state.get_map() as *const anymap3::Map<dyn anymap3::CloneAny + Send> )})
+//     }
+// }
+
+impl<Req, State, Res> FromRequest<Req, State, Res> for &mut anymap3::Map<dyn std::any::Any + Send> where State: ContainsMapMut + Send, Req: Send, Res: Send {
+    fn from_request(bundle: &mut Bundle<Req, State, Res>) -> Option<Self> {
+        Some(unsafe { &mut *(bundle.state.get_map() as *mut anymap3::Map<dyn std::any::Any + Send> )})
+    }
 }

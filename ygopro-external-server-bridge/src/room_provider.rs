@@ -1,5 +1,7 @@
+use std::future::Future;
 use std::io::Cursor;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::LazyLock;
 
@@ -15,6 +17,7 @@ use tokio::io::BufReader;
 use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::codec::FramedRead;
 use tokio_util::codec::FramedWrite;
@@ -81,6 +84,13 @@ impl YgoproBinaryFactory {
         let port: u16 = port_line.trim().parse().map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         let server_address = SocketAddr::new([127, 0, 0, 1].into(), port);
 
+        let (finished_sender, _) = watch::channel(false);
+        let finished_sender_for_provider = finished_sender.clone();
+        tokio::spawn(async move {
+            child.wait().await.ok();
+            finished_sender.send(true).ok();
+        });
+
         tokio::spawn(async move {
             let mut stderr_reader = BufReader::new(stderr);
             let mut stdout_line = String::new();
@@ -101,17 +111,20 @@ impl YgoproBinaryFactory {
             }
         });
 
-        Ok(YgoproBinaryProvider { server_address })
+        Ok(YgoproBinaryProvider { server_address, finished_sender: finished_sender_for_provider })
     }
 }
 
 pub struct YgoproBinaryProvider {
     server_address: SocketAddr,
+    finished_sender: watch::Sender<bool>,
 }
 
 impl YgoproBinaryProvider {
-    fn spawn_proxy<ServerToClientMessage>(&self, client_to_server_stream: impl Stream<Item = ctos::Message> + Unpin + Send + 'static, sender: mpsc::UnboundedSender<ServerToClientMessage>) 
-    where ServerToClientMessage: From<stoc::Message> + Send + 'static {
+    fn spawn_proxy<Item, Convert, ServerToClientMessage>(&self, client_to_server_stream: impl Stream<Item = Item> + Unpin + Send + 'static, mut convert: Convert, sender: mpsc::UnboundedSender<ServerToClientMessage>) 
+    where Item: Send + 'static, 
+          Convert: FnMut(Item) -> Option<Bytes> + Send + 'static, ServerToClientMessage: From<stoc::Message> + Send + 'static 
+    {
         let server_address = self.server_address;
 
         tokio::spawn(async move {
@@ -138,9 +151,9 @@ impl YgoproBinaryProvider {
                         _ => break,
                     },
                     message = client_to_server_stream.next() => {
-                        let message = match message { Some(message) => message, None => break };
-                        let payload = match encode_ctos_message(&message) { Some(payload) => payload, None => break };
-                        if framed_writer.send(Bytes::from(payload)).await.is_err() {
+                        let Some(item) = message else { break };
+                        let Some(payload) = convert(item) else { break };
+                        if framed_writer.send(payload).await.is_err() {
                             log::warn!("Failed to send CTOS message to ygopro");
                         }
                     }
@@ -149,25 +162,57 @@ impl YgoproBinaryProvider {
             log::info!("stoc listener stopped");
         });
     }
+
+    fn finish_signal(&self) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let mut finished_receiver = self.finished_sender.subscribe();
+        Box::pin(async move {
+            let _ = finished_receiver.wait_for(|finished| *finished).await;
+        })
+    }
 }
 
 impl RoomProvider<ctos::Message, stoc::Message> for YgoproBinaryProvider {
     type ServerToClientStream = UnboundedReceiverStream<stoc::Message>;
+    type FinishFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
     fn add(&mut self, client_to_server_stream: impl Stream<Item = ctos::Message> + Unpin + Send + 'static) -> Self::ServerToClientStream {
         let (sender, receiver) = mpsc::unbounded_channel();
-        self.spawn_proxy(client_to_server_stream, sender);
+        self.spawn_proxy(client_to_server_stream, |message| encode_ctos_message(&message).map(Bytes::from), sender);
         UnboundedReceiverStream::new(receiver)
+    }
+
+    fn get_finish_signal(&mut self) -> Self::FinishFuture {
+        self.finish_signal()
     }
 }
 
 impl RoomProvider<ctos::Message, Complex<stoc::Message>> for YgoproBinaryProvider {
     type ServerToClientStream = UnboundedReceiverStream<Complex<stoc::Message>>;
+    type FinishFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
     fn add(&mut self, client_to_server_stream: impl Stream<Item = ctos::Message> + Unpin + Send + 'static) -> Self::ServerToClientStream {
         let (sender, receiver) = mpsc::unbounded_channel();
-        self.spawn_proxy(client_to_server_stream, sender);
+        self.spawn_proxy(client_to_server_stream, |message| encode_ctos_message(&message).map(Bytes::from), sender);
         UnboundedReceiverStream::new(receiver)
+    }
+
+    fn get_finish_signal(&mut self) -> Self::FinishFuture {
+        self.finish_signal()
+    }
+}
+
+impl RoomProvider<Complex<ctos::Message>, Complex<stoc::Message>> for YgoproBinaryProvider {
+    type ServerToClientStream = UnboundedReceiverStream<Complex<stoc::Message>>;
+    type FinishFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+    fn add(&mut self, client_to_server_stream: impl Stream<Item = Complex<ctos::Message>> + Unpin + Send + 'static) -> Self::ServerToClientStream {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        self.spawn_proxy(client_to_server_stream, |complex| Some(complex.data.clone()), sender);
+        UnboundedReceiverStream::new(receiver)
+    }
+
+    fn get_finish_signal(&mut self) -> Self::FinishFuture {
+        self.finish_signal()
     }
 }
 

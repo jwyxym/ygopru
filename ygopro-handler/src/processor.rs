@@ -15,6 +15,8 @@ use ygopro_data::message::stoc;
 
 use crate::handler::Bundle;
 use crate::handler::Call;
+use crate::handler::sync_handler::SyncHandler;
+use crate::handler::sync_handler::WithSubState;
 use crate::extract::Request;
 
 pub fn resolve_globals<K, H: Clone>(handlers: &mut HashMap<K, Vec<H>>, global_handlers: &[H], key: impl Fn(&H) -> u8) {
@@ -50,7 +52,19 @@ impl MessageKey<u8> for u8 {
     }
 }
 
-impl<Message> MessageKey<u8> for complex::Complex<Message> {
+impl MessageKey<u8> for complex::Complex<ctos::Message> {
+    fn message_key(&self) -> u8 {
+        self.data[0]
+    }
+}
+
+impl MessageKey<u8> for complex::Complex<stoc::Message> {
+    fn message_key(&self) -> u8 {
+        self.data[0]
+    }
+}
+
+impl MessageKey<u8> for complex::Complex<gm::Message> {
     fn message_key(&self) -> u8 {
         self.data[0]
     }
@@ -213,6 +227,57 @@ where
                 bundle
             }
         })
+    }
+}
+
+impl<Key, Req, Target, Res> Processor<Key, Req, Target, Res, SyncHandler<Req, Target, Res>>
+where
+    Key: Eq + Hash,
+    Req: Send + 'static,
+    Target: Send + 'static,
+    Res: Send + 'static + std::ops::Mul<Output = Res>,
+{
+    pub fn new_with_dual_group<SubState>(
+        target_builders: &[fn() -> (Key, SyncHandler<Req, Target, Res>)],
+        source_builders: &[fn() -> (Key, SyncHandler<Req, SubState, Res>)],
+        groups: &HashSet<String>,
+        target_group_of: fn(&SyncHandler<Req, Target, Res>) -> &'static str,
+        source_group_of: fn(&SyncHandler<Req, SubState, Res>) -> &'static str,
+        is_all: impl Fn(&Key) -> bool,
+    ) -> Self
+    where
+        SubState: Send + 'static,
+        Target: WithSubState<SubState>,
+    {
+        let mut processor = Self::new();
+        for build in target_builders {
+            let (key, handler) = build();
+            if !groups.is_empty() && !groups.contains(target_group_of(&handler)) { continue; }
+            if is_all(&key) { processor.register_global(handler); } else { processor.register(key, handler); };
+        }
+        let mut source_processor = Processor::<Key, Req, SubState, Res, SyncHandler<Req, SubState, Res>>::new();
+        for build in source_builders {
+            let (key, handler) = build();
+            if !groups.is_empty() && !groups.contains(source_group_of(&handler)) { continue; }
+            if is_all(&key) { source_processor.register_global(handler); } else { source_processor.register(key, handler); };
+        }
+        processor.extend(source_processor);
+        processor.resolve();
+        processor
+    }
+
+    pub fn extend<SubState>(&mut self, processor_source: Processor<Key, Req, SubState, Res, SyncHandler<Req, SubState, Res>>)
+    where
+        SubState: Send + 'static,
+        Target: WithSubState<SubState>,
+    {
+        crate::handler::sync_handler::assert_sync_handler_layout::<Req, SubState, Target, Res>();
+        for (key, handlers) in processor_source.handlers {
+            self.handlers.entry(key).or_default().extend(handlers.into_iter()
+                .map(|handler| unsafe { std::mem::transmute::<SyncHandler<Req, SubState, Res>, SyncHandler<Req, Target, Res>>(handler) }));
+        }
+        self.global_handlers.extend(processor_source.global_handlers.into_iter()
+            .map(|handler| unsafe { std::mem::transmute::<SyncHandler<Req, SubState, Res>, SyncHandler<Req, Target, Res>>(handler) }));
     }
 }
 

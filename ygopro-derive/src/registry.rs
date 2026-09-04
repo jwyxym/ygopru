@@ -11,11 +11,14 @@ use syn::Token;
 struct HandlerArgs {
     #[darling(default)]
     priority: Option<u8>,
+    #[darling(default)]
+    module: Option<syn::LitStr>,
 }
 
 pub struct ParsedArgs {
     pub key: Path,
     pub priority: u8,
+    pub module: Option<syn::LitStr>,
 }
 
 pub fn parse_args(attr: &[NestedMeta], transform_priority: impl Fn(Option<u8>) -> u8) -> Result<ParsedArgs, darling::Error> {
@@ -30,7 +33,7 @@ pub fn parse_args(attr: &[NestedMeta], transform_priority: impl Fn(Option<u8>) -
         .collect();
     let args = HandlerArgs::from_list(&named)?;
     let priority = transform_priority(args.priority);
-    Ok(ParsedArgs { key, priority })
+    Ok(ParsedArgs { key, priority, module: args.module })
 }
 
 pub struct RegisterInfo {
@@ -102,6 +105,11 @@ pub fn shared_impl(args: ParsedArgs, function: ItemFn) -> TokenStream2 {
 
     let key = args.key;
 
+    let module_expression = match &args.module {
+        Some(module) => quote! { #module },
+        None => quote! { module_path!() },
+    };
+
     let register_infos = parse_registers(&function);
 
     if register_infos.is_empty() {
@@ -128,7 +136,7 @@ pub fn shared_impl(args: ParsedArgs, function: ItemFn) -> TokenStream2 {
             fn #builder_ident() -> (#key_type, #handler_type) {
                 (
                     ::std::convert::Into::<#key_type>::into(<#key as ::ygopro_data::message::Message>::message_type()),
-                    #handler_type::new(#priority, #function_name, module_path!(), #function_ident),
+                    #handler_type::new(#priority, #function_name, #module_expression, #function_ident),
                 )
             }
         }

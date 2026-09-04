@@ -17,7 +17,7 @@ use tokio_util::codec::FramedRead;
 use tokio_util::codec::FramedWrite;
 use tokio_util::codec::LengthDelimitedCodec;
 use ygopro::Configuration;
-use ygopro::SingleDuel;
+use ygopro::host::DuelHost;
 use ygopro_core_wrapper::DuelSeed;
 use ygopro_data::complex::Complex;
 use ygopro_data::constants::Color;
@@ -84,7 +84,7 @@ impl RoomFactory for YgoproBinaryFactory {
 struct SingleDuelFactory;
 
 impl RoomFactory for SingleDuelFactory {
-    type Room = SingleDuel;
+    type Room = DuelHost;
 
     fn create_room(&self, replay: Replay) -> impl Future<Output = Result<(Player<Self::Room>, Player<Self::Room>), ReconstructionError>> + Send {
         async move {
@@ -93,7 +93,7 @@ impl RoomFactory for SingleDuelFactory {
             configuration.no_mask = true;
             configuration.enable_plugin(ygopro::plugin::no_init_shuffle_deck::NAME);
             configuration.seed_generator = Some(Box::new(move |_duel_count: u8| DuelSeed::Complicated(seed_sequence)));
-            let (duel, _handle) = SingleDuel::new(replay.host_info(), configuration);
+            let duel = DuelHost::new(replay.host_info(), configuration);
             drive_replay(duel, replay).await
         }
     }

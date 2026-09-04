@@ -210,6 +210,8 @@ pub mod complex {
     use binrw::BinWrite;
     use bytes::Bytes;
 
+    use crate::message::PureMessage;
+
     /// Lazy-deserialized message. Holds raw `Bytes` until first access,
     /// then parses into `Message` once and caches the result via `OnceLock`.
     /// When writing, always uses the original raw bytes — never re-serializes.
@@ -219,16 +221,7 @@ pub mod complex {
         pub message: OnceLock<Message>,
     }
 
-    impl<Message> Clone for Complex<Message> where Message: Clone {
-        fn clone(&self) -> Self {
-            Self {
-                data: self.data.clone(),
-                message: self.message.clone(),
-            }
-        }
-    }
-
-    impl<Message: BinRead> Complex<Message> where for<'a> <Message as BinRead>::Args<'a>: Default {
+    impl<Message> Complex<Message> {
         pub fn new(data: Bytes) -> Self {
             Self {
                 data,
@@ -236,19 +229,10 @@ pub mod complex {
             }
         }
 
-        pub fn from_message(message: Message) -> Self where Message: BinWrite,for<'a> <Message as BinWrite>::Args<'a>: Default {
-            let mut cursor = Cursor::new(Vec::new());
-            message.write_le(&mut cursor).expect("failed to serialize Complex message");
-            Self {
-                data: Bytes::from(cursor.into_inner()),
-                message: OnceLock::from(message),
-            }
-        }
-
-        pub fn shadow_clone(&self) -> Self {
+        pub fn super_clone(&self) -> Self where Message: Clone {
             Self {
                 data: self.data.clone(),
-                message: OnceLock::new()
+                message: self.message.clone()
             }
         }
 
@@ -256,12 +240,40 @@ pub mod complex {
             &self.data
         }
 
+    }
+
+    impl<Message> Clone for Complex<Message> {
+        fn clone(&self) -> Self {
+            Self {
+                data: self.data.clone(),
+                message: OnceLock::new(),
+            }
+        }
+    }
+
+    impl<Message: BinWrite> Complex<Message> where Message: BinWrite,for<'a> <Message as BinWrite>::Args<'a>: Default {
+        pub fn from_message(message: Message) -> Self {
+            let mut cursor = Cursor::new(Vec::new());
+            message.write_le(&mut cursor).expect("failed to serialize Complex message");
+            Self {
+                data: Bytes::from(cursor.into_inner()),
+                message: OnceLock::from(message),
+            }
+        }
+    }
+
+    impl<Message: BinRead> Complex<Message> where for<'a> <Message as BinRead>::Args<'a>: Default {
         pub fn try_get(&self) -> Result<&Message, binrw::Error> {
             if let Some(message) = self.message.get() {
                 return Ok(message);
             }
             let message = Message::read_le(&mut Cursor::new(&self.data))?;
             Ok(self.message.get_or_init(|| message))
+        }
+
+        pub fn into_inner(self) -> Option<Message> {
+            self.try_get().ok();
+            self.message.into_inner()
         }
     }
 
@@ -282,7 +294,7 @@ pub mod complex {
         }
     }
 
-    impl<Message> From<Message> for Complex<Message>
+    impl<Message: PureMessage> From<Message> for Complex<Message>
     where
         Message: BinRead + BinWrite,
         for<'a> <Message as BinRead>::Args<'a>: Default,
@@ -290,6 +302,12 @@ pub mod complex {
     {
         fn from(message: Message) -> Self {
             Self::from_message(message)
+        }
+    }
+
+    impl<Message: BinRead> From<Bytes> for Complex<Message> where for<'a> <Message as BinRead>::Args<'a>: Default {
+        fn from(bytes: Bytes) -> Self {
+            Self::new(bytes)
         }
     }
 

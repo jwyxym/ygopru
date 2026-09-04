@@ -138,10 +138,10 @@ pub struct ReplayBody {
     #[br(if(header.is_tag()))]
     #[bw(if(header.is_tag()))]
     pub tag_host_name: Option<FixedLengthString<20>>,
-    pub client_name: FixedLengthString<20>,
     #[br(if(header.is_tag()))]
     #[bw(if(header.is_tag()))]
     pub tag_client_name: Option<FixedLengthString<20>>,
+    pub client_name: FixedLengthString<20>,
     pub start_lp: u32,
     pub start_hand: u32,
     pub draw_count: u32,
@@ -152,10 +152,10 @@ pub struct ReplayBody {
     #[br(if(header.is_tag()))]
     #[bw(if(header.is_tag()))]
     pub tag_host_deck: Option<ReplayDeck>,
+    pub client_deck: ReplayDeck,
     #[br(if(header.is_tag()))]
     #[bw(if(header.is_tag()))]
     pub tag_client_deck: Option<ReplayDeck>,
-    pub client_deck: ReplayDeck,
     #[br(parse_with=until_eof)]
     pub datas: Vec<ReplayData>
 }

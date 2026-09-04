@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::fmt::Display;
+use std::str::FromStr;
 
 use binrw::BinRead;
 use binrw::BinWrite;
@@ -91,6 +93,58 @@ impl Deck {
     }
 }
 
+impl ToString for Deck {
+    fn to_string(&self) -> String {
+        let mut text = String::from("#ygopro-rs deck generated\n#main\n");
+        for code in &self.main {
+            text.push_str(&code.to_string());
+            text.push('\n');
+        }
+        if self.extra.len() > 0 {
+            text.push_str("#extra\n");
+            for code in &self.extra {
+                text.push_str(&code.to_string());
+                text.push('\n');
+            }
+        }
+        text.push_str("!side\n");
+        for code in &self.side {
+            text.push_str(&code.to_string());
+            text.push('\n');
+        }
+        text
+    }
+}
+
+impl FromStr for Deck {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut deck = Self::new();
+        let mut section = &mut deck.main;
+        for line in s.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            match line.as_bytes()[0] {
+                b'!' => section = &mut deck.side,
+                b'#' => match line {
+                    "#main" => section = &mut deck.main,
+                    "#extra" => section = &mut deck.extra,
+                    _ => {}
+                },
+                b'0'..=b'9' => {
+                    let code_end = line.find(|c: char| !c.is_ascii_digit()).unwrap_or(line.len());
+                    if let Ok(code) = line[..code_end].parse::<u32>() {
+                        section.push(code);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(deck)
+    }
+}
+
 impl PartialEq for Deck {
     fn eq(&self, other: &Self) -> bool {
         if self.main.len() != other.main.len() 
@@ -125,8 +179,8 @@ pub enum DeckErrorType {
 #[bw(map = |&x| Self::into_bytes(x))]
 #[repr(u32)]
 pub struct DeckError {
-    code: modular_bitfield::specifiers::B28,
-    error_type: DeckErrorType,
+    pub code: modular_bitfield::specifiers::B28,
+    pub error_type: DeckErrorType,
 }
 
 impl Display for DeckError {
@@ -227,4 +281,36 @@ pub fn check_deck_lflists<'a>(codes: impl Iterator<Item = &'a u32>, lflist: &LFL
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::data::Deck;
+
+    #[test]
+    fn splits_main_and_side_at_bang_marker() {
+        let deck: Deck = "#created by test\n#main\n123\n456\n#extra\n789\n!side\n111\n222\n"
+            .parse()
+            .unwrap();
+        assert_eq!(deck.main, vec![123, 456, 789]);
+        assert!(deck.extra.is_empty());
+        assert_eq!(deck.side, vec![111, 222]);
+    }
+
+    #[test]
+    fn drops_comment_blank_and_invalid_lines() {
+        let deck: Deck = "   \n#comment\n123abc\nnot-a-number\n!side\n\nxyz\n".parse().unwrap();
+        assert_eq!(deck.main, vec![123]);
+        assert!(deck.side.is_empty());
+    }
+
+    #[test]
+    fn round_trips_through_to_string() {
+        let deck: Deck = "#main\n1\n2\n3\n!side\n4\n".parse().unwrap();
+        let text = deck.to_string();
+        let reparsed: Deck = text.parse().unwrap();
+        assert_eq!(reparsed.main, deck.main);
+        assert_eq!(reparsed.extra, deck.extra);
+        assert_eq!(reparsed.side, deck.side);
+    }
 }

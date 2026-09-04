@@ -1,0 +1,199 @@
+//! Toolkits for starting ygopro as a local server.
+//!
+//! # Examples
+//!
+//! Just like what [`main`](crate::main) do:
+//!
+//! ```rust,no_run
+//! use ygopro::cli::*;
+//!
+//! # async fn run() {
+//! let args = std::env::args().collect::<Vec<String>>();
+//! let (port, hostinfo, replay_mode, pre_seeds) = parse_cli_args(args).unwrap();
+//! let duel = build_duel_host(hostinfo, replay_mode, pre_seeds);
+//! start_local_server(port, duel).await;
+//! # }
+//! ```
+
+use std::io::Cursor;
+
+use binrw::BinRead;
+use futures::SinkExt;
+use tokio::net::TcpListener;
+
+use base64::Engine;
+use tokio_stream::StreamExt;
+use tokio_util::codec::LengthDelimitedCodec;
+use ygopro_core_wrapper::DuelSeed;
+use ygopro_core_wrapper::random::SEED_COUNT;
+use ygopro_data::complex::Complex;
+use ygopro_data::constants::*;
+use ygopro_data::message::{HostInfo, ctos, stoc};
+use ygopro_data::data::ReplayMode;
+use ygopro_handler::RoomProvider;
+
+use crate::Configuration;
+use crate::host::DuelHost;
+
+/// Error type for command line argument parsing.
+#[derive(Debug)]
+pub enum CliError {
+    /// Params is not enough or too many.
+    BadParamCount,
+    // Cannot parse port number.
+    InvalidPort(String),
+    // Cannot decode seed.
+    InvalidSeed(String),
+}
+
+impl std::fmt::Display for CliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CliError::BadParamCount => write!(f, "Bad param count. Please refer to readme, or don't use any param to quick test."),
+            CliError::InvalidPort(port) => write!(f, "Cannot parse port number: {port}"),
+            CliError::InvalidSeed(seed) => write!(f, "Cannot decode seed: {seed}"),
+        }
+    }
+}
+
+impl std::error::Error for CliError {}
+
+/// Parse command line arguments and return the port, host info, replay mode, and pre-seeds.
+///
+/// # Examples
+///
+/// ```
+/// use ygopro::cli::parse_cli_args;
+///
+/// let (port, hostinfo, replay_mode, pre_seeds) = parse_cli_args(vec!["ygopro".to_string(), "2334".to_string()]).unwrap();
+/// assert_eq!(port, 2334);
+/// ```
+pub fn parse_cli_args(args: Vec<String>) -> Result<(u16, HostInfo, ReplayMode, Vec<[u32; SEED_COUNT]>), CliError> {
+    if args.len() > 2 && args.len() < 13 {
+        return Err(CliError::BadParamCount);
+    } else if args.len() == 1 {
+        return Ok((0, HostInfo::default(), ReplayMode::empty(), Vec::new()));
+    } else if args.len() == 2 {
+        let port: u16 = args[1].parse().map_err(|_| CliError::InvalidPort(args[1].clone()))?;
+        return Ok((port, HostInfo::default(), ReplayMode::empty(), Vec::new()));
+    }
+
+    let port: u16 = args[1].parse().map_err(|_| CliError::InvalidPort(args[1].clone()))?;
+    let deck_manager = crate::managers::deck_manager::load();
+
+    let hostinfo = HostInfo {
+        lflist: deck_manager.get_lflist_by_index(args[2].parse().unwrap_or(0)).map(|l| l.hash).unwrap_or(0),
+        rule: Rule::try_from(args[3].parse::<u8>().unwrap_or(0)).unwrap_or(Rule::All),
+        mode: match args[4].parse::<u8>().unwrap_or(0) {
+            m if m > 2 => Mode::Single,
+            m => Mode::try_from(m).unwrap_or(Mode::Single),
+        },
+        duel_rule: if args[5] == "T" {
+            MasterRule::MasterRuleNew
+        } else if args[5] == "F" {
+            MasterRule::MasterRule2020
+        } else if let Ok(r) = args[5].parse::<u8>() {
+            if r != 0 { MasterRule::try_from(r).unwrap_or(MasterRule::MasterRule2020) }
+            else { MasterRule::MasterRule2020 }
+        } else {
+            MasterRule::MasterRule2020
+        },
+        no_check_deck: args[6] == "T",
+        no_shuffle_deck: args[7] == "T",
+        start_lp: args[8].parse().unwrap_or(8000),
+        start_hand: args[9].parse().unwrap_or(5),
+        draw_count: args[10].parse().unwrap_or(1),
+        time_limit: args[11].parse().unwrap_or(180),
+    };
+    let replay_mode = ReplayMode::from_bits_retain(args[12].parse::<u32>().unwrap_or(0));
+    let pre_seeds = args.iter().skip(13).map(|seed_arg| decode_seed(seed_arg)).collect::<Result<Vec<_>, _>>()?;
+    Ok((port, hostinfo, replay_mode, pre_seeds))
+}
+
+
+fn decode_seed(seed_arg: &str) -> Result<[u32; SEED_COUNT], CliError> {
+    let bytes = base64::engine::general_purpose::STANDARD.decode(seed_arg).map_err(|_| CliError::InvalidSeed(seed_arg.to_string()))?;
+    let mut seed = [0u32; ygopro_core_wrapper::random::SEED_COUNT];
+    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+        seed[index] = u32::from_le_bytes(chunk.try_into().unwrap());
+    }
+    Ok(seed)
+}
+
+/// Build a [`DuelHost`] from host info, replay mode, and pre-seeds.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use ygopro::cli::build_duel_host;
+/// use ygopro_data::message::HostInfo;
+/// use ygopro_data::data::ReplayMode;
+///
+/// let duel = build_duel_host(HostInfo::default(), ReplayMode::empty(), Vec::new());
+/// ```
+pub fn build_duel_host(hostinfo: HostInfo, replay_mode: ReplayMode, pre_seeds: Vec<[u32; SEED_COUNT]>) -> DuelHost {
+    let mut configuration = Configuration::default();
+    configuration.seed_generator = Some(Box::new(move |duel_count: u8| {
+        match pre_seeds.get(duel_count as usize).copied() {
+            Some(seed) => DuelSeed::Complicated(seed),
+            None => DuelSeed::None,
+        }
+    }));
+    configuration.enable_plugin_with_configuration(crate::plugin::replay::NAME, crate::plugin::replay::Configuration { mode: replay_mode });
+    DuelHost::new(hostinfo, configuration)
+}
+
+/// Start a one-shot local server on a fixed port with an built [`DuelHost`].
+///
+/// # Examples
+/// 
+/// ```rust,no_run
+/// use ygopro::cli::{build_duel_host, start_local_server};
+/// use ygopro_data::message::HostInfo;
+/// use ygopro_data::data::ReplayMode;
+///
+/// # async fn run() {
+/// let duel = build_duel_host(HostInfo::default(), ReplayMode::empty(), Vec::new());
+/// start_local_server(0, duel).await;
+/// # }
+/// ```
+pub async fn start_local_server(port: u16, mut duel: impl RoomProvider<ctos::Message, Complex<stoc::Message>> + Send + 'static) {
+    let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await.expect("Failed to bind to port");
+    let port = listener.local_addr().expect("Failed to get random port").port();
+    println!("{port}");
+    log::info!("listening on port {port}");
+    let finish_signal = duel.get_finish_signal();
+
+    tokio::spawn(async move {
+        loop {
+            let (stream, _addr) = listener.accept().await.expect("Failed to accept connection");
+            let (reader, writer) = stream.into_split();
+            let framed_read = LengthDelimitedCodec::builder()
+                .length_field_type::<u16>()
+                .little_endian()
+                .new_read(reader);
+            let mut framed_write = LengthDelimitedCodec::builder()
+                .length_field_type::<u16>()
+                .little_endian()
+                .new_write(writer);
+
+            let ctos_stream = framed_read.filter_map(|result| match result {
+                Ok(frame) => {
+                    let mut cursor = Cursor::new(&frame);
+                    ctos::Message::read_le(&mut cursor).ok()
+                }
+                Err(_) => None,
+            });
+
+            let mut stoc_stream = duel.add(ctos_stream);
+
+            tokio::spawn(async move {
+                while let Some(message) = stoc_stream.next().await {
+                    framed_write.send(message.data).await.ok();
+                }
+            });
+        }
+    });
+
+    finish_signal.await;
+}

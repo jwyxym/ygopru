@@ -1,19 +1,32 @@
+//! YGOPro, rewritten in rust version.
+//! 
+//! Here should be some very big readme.
+
 pub mod single_duel;
-pub mod common;
+pub mod tag_duel;
+pub mod duel;
+pub mod host;
 pub mod managers;
 pub mod plugin;
 pub mod message;
+pub mod command;
+pub mod cli;
+pub mod ygopro_handlers;
+pub mod ygocore_handlers;
+pub mod player;
+mod configuration;
 #[cfg(feature = "zip")]
 pub mod ypk;
 
-pub use single_duel::SingleDuelHost as SingleDuel;
-pub use common::Configuration as Configuration;
+pub use configuration::Configuration as Configuration;
+pub use plugin::version_check::PRO_VERSION as PRO_VERSION;
+pub use host::DuelHost as DuelHost;
 
 use std::ffi::CStr;
 use std::os::raw::c_char;
-
 use managers::*;
-pub const PRO_VERSION: u16 = 0x1362;
+
+#[macro_use] extern crate ygopro_derive;
 
 pub fn init() {
     managers::config_manager::init();
