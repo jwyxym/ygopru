@@ -157,7 +157,7 @@ pub fn build_duel_host(hostinfo: HostInfo, replay_mode: ReplayMode, pre_seeds: V
 /// start_local_server(0, duel).await;
 /// # }
 /// ```
-pub async fn start_local_server(port: u16, mut duel: impl RoomProvider<ctos::Message, Complex<stoc::Message>> + Send + 'static) {
+pub async fn start_local_server(port: u16, mut duel: impl RoomProvider<ctos::Message, Complex<stoc::Message>> + Send + 'static) -> u16 {
     let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await.expect("Failed to bind to port");
     let port = listener.local_addr().expect("Failed to get random port").port();
     println!("{port}");
@@ -196,4 +196,5 @@ pub async fn start_local_server(port: u16, mut duel: impl RoomProvider<ctos::Mes
     });
 
     finish_signal.await;
+    port
 }
