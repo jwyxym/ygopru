@@ -1,6 +1,6 @@
 [submodule "ygopro-core-wrapper/ocgcore"]
 	path = ygopro-core-wrapper/ocgcore
-	url = https://github.com/mycard/ygopro-core
+	url = https://github.com/jwyxym/ygopro-core.git
 [submodule "ygopro-core-wrapper/lua"]
 	path = ygopro-core-wrapper/lua
 	url = https://github.com/lua/lua
