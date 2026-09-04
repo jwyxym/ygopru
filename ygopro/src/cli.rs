@@ -157,16 +157,26 @@ pub fn build_duel_host(hostinfo: HostInfo, replay_mode: ReplayMode, pre_seeds: V
 /// start_local_server(0, duel).await;
 /// # }
 /// ```
-pub async fn start_local_server(port: u16, mut duel: impl RoomProvider<ctos::Message, Complex<stoc::Message>> + Send + 'static) -> u16 {
+pub async fn start_local_server(port: u16, mut duel: impl RoomProvider<ctos::Message, Complex<stoc::Message>> + Send + 'static) {
     let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await.expect("Failed to bind to port");
     let port = listener.local_addr().expect("Failed to get random port").port();
     println!("{port}");
     log::info!("listening on port {port}");
+    start_local_server_with_listener(listener, duel).await;
+}
+/// Start a one-shot local server with an existing [`TcpListener`].
+pub async fn start_local_server_with_listener(
+    listener: TcpListener,
+    mut duel: impl RoomProvider<ctos::Message, Complex<stoc::Message>> + Send + 'static,
+) {
     let finish_signal = duel.get_finish_signal();
 
     tokio::spawn(async move {
         loop {
-            let (stream, _addr) = listener.accept().await.expect("Failed to accept connection");
+            let (stream, _addr) = listener
+                .accept()
+                .await
+                .expect("Failed to accept connection");
             let (reader, writer) = stream.into_split();
             let framed_read = LengthDelimitedCodec::builder()
                 .length_field_type::<u16>()
@@ -196,5 +206,4 @@ pub async fn start_local_server(port: u16, mut duel: impl RoomProvider<ctos::Mes
     });
 
     finish_signal.await;
-    port
 }
