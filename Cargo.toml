@@ -1,8 +1,26 @@
+[package]
+name = "ygopru"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description.workspace = true
+readme = "README.md"
+keywords = ["ygopro"]
+
 [workspace.package]
 edition = "2024"
 license-file = "LICENSE"
 repository = "https://github.com/iamipanda/ygopru"
 description = "A Rust rewrite of the YGOPro duel server."
+
+[dependencies]
+ygopro.workspace = true
+ygopro-data.workspace = true
+ygopro-handler.workspace = true
+ygopro-core-wrapper.workspace = true
+ygopro-derive.workspace = true
+ygopro-external-server-bridge.workspace = true
 
 [workspace.dependencies]
 ygopro = { path = "./ygopro", default-features = false }
@@ -11,6 +29,21 @@ ygopro-handler = { path = "./ygopro-handler", default-features = false }
 ygopro-core-wrapper = { path = "./ygopro-core-wrapper", default-features = false }
 ygopro-derive = { path = "./ygopro-derive" }
 ygopro-external-server-bridge = { path = "./ygopro-external-server-bridge", default-features = false }
+
+[features]
+default = [
+    "zip",
+    "card"
+]
+zip = ["ygopro/zip"]
+card = [
+    "ygopro/card",
+    "ygopro-core-wrapper/card",
+    "ygopro-data/card",
+    "ygopro-external-server-bridge/card",
+    "ygopro-handler/card",
+]
+ygomobile_support = ["ygopro/ygomobile_support"]
 
 [workspace]
 default-members = ["ygopro"]
