@@ -54,6 +54,7 @@ card = [
     "ygopro-core-wrapper/card",
     "ygopro-data/card",
 ]
+koishi = ["ygopro-core-wrapper/koishi"]
 ygomobile_support = []
 
 [package.metadata]

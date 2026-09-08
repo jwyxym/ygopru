@@ -20,5 +20,8 @@ cc = "1"
 glob = "0.3"
 
 [features]
-default = []
+default = ["official"]
+official = []
+koishi = []
+custom = []
 card = ["ygopro-data/card"]
