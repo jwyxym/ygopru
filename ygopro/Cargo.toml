@@ -48,7 +48,7 @@ semver = "1"
 toml = "0.9"
 
 [features]
-default = ["zip", "card"]
+default = []
 zip = ["dep:zip"]
 card = [
     "ygopro-core-wrapper/card",

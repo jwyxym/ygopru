@@ -35,6 +35,10 @@ default = [
     "zip",
     "card"
 ]
+koishi = [
+    "ygopro/koishi",
+    "ygopro-core-wrapper/koishi"
+]
 zip = ["ygopro/zip"]
 card = [
     "ygopro/card",
